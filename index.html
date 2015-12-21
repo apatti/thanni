@@ -1,0 +1,68 @@
+<html>
+<head>
+  <script src="..\createjs-2015.11.26.min.js"></script>
+</head>
+<body onload="init();">
+  <canvas id="democanvas" width="500" height="300"></canvas>
+  <script>
+    var update = true;
+    var stage;
+    function init()
+    {
+        stage=new createjs.Stage("democanvas");
+        createjs.Touch.enable(stage);
+        stage.enableMouseOver(10);
+        stage.mouseMouseOutside = true;
+        
+        var circle=new createjs.Shape();
+        circle.graphics.beginFill("DeepSkyBlue").drawCircle(0,0,50);
+        circle.x=100;
+        circle.y=100;
+        circle.on("mousedown",function(ev){
+                  this.parent.addChild(this);
+                  this.offset={x:this.x - ev.stageX,y:this.y-ev.stageY};
+                  });
+        circle.on("pressmove", function (evt) {
+                  //if(this.offset.x>40)
+                  {
+                    this.x = evt.stageX + this.offset.x;
+                    this.y = evt.stageY + this.offset.y;
+                  // indicate that the stage should be updated on the next tick:
+                    update = true;
+                  }
+                  });
+        circle.on("pressup",function(evt){
+                  if((this.x-evt.stageX+this.offset.x)>40)
+                  {
+                    this.x = evt.stageX + this.offset.x;
+                    this.y = evt.stageY + this.offset.y;
+                    update=true;
+                  }
+                            
+                });
+        circle.on("rollover", function (evt) {
+                  this.scaleX = this.scaleY = 1 * 1.2;
+                  update = true;
+                  });
+        circle.on("rollout", function (evt) {
+                  this.scaleX = this.scaleY = 1;
+                  update = true;
+                  });
+    
+        stage.addChild(circle);
+        stage.update();
+        createjs.Ticker.addEventListener("tick",tick);
+    }
+    
+    
+    function tick()
+    {
+        if(update)
+        {
+            update=false;
+            stage.update();
+        }
+    }
+  </script>
+</body>
+</html>
