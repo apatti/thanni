@@ -19,6 +19,7 @@ import {
   applyRoundScoring,
   evaluateTrickWithContext,
   determineTrickWinner,
+  simulateAction,
   THANNI_WIN_POINTS,
   THANNI_FAIL_PENALTY,
   HATH_BAND_WIN_POINTS,
@@ -29,6 +30,7 @@ import {
   type PlayedCard,
   type PlayerId,
 } from '../thanniEngine';
+import { HeuristicAI, getAIStrategy, getAISeatMode, setAISeatMode, resetAIMode, isDefaultMode, DEFAULT_MODE, type CardplayView, type BiddingView } from '../src/ai';
 
 type Case = { name: string; fn: () => void };
 const cases: Case[] = [];
@@ -651,6 +653,174 @@ cases.push({
     assertEq('balanceShift', result.balanceShift, -HATH_BAND_FAIL_PENALTY);
     assertEq('matchOver', result.matchOver, true);
     assertEq('winner', result.winner, 'BLACK');
+  },
+});
+
+// ─── AI strategy + feature flag scenarios ───────────────────────────────
+
+// Case 29: HeuristicAI.chooseCard returns a legal card.
+cases.push({
+  name: 'HeuristicAI.chooseCard returns a card from the legal set',
+  fn: () => {
+    const deck = buildDeck();
+    const legal = ['JH', '9H', 'AH', '10H'].map(id => deck.find(c => c.id === id)!);
+    const view: CardplayView = {
+      myId: 'p1',
+      myHand: legal,
+      legal,
+      trickPile: [],
+      trump: null,
+      trumpOpen: false,
+      partnerId: 'p3',
+      isSoloRound: false,
+      soloCallerId: null,
+      foldedPartnerId: null,
+      tricksRemaining: 6,
+      fullHands: new Map([['p1', legal]]),
+      balance: 0,
+      bidWinner: null,
+      currentBid: null,
+    };
+    const ai = new HeuristicAI();
+    const pick = ai.chooseCard(view);
+    assertEq('pick is legal', legal.some(c => c.id === pick.id), true);
+    assertEq('strategy name', ai.name, 'HeuristicAI');
+  },
+});
+
+// Case 30: HeuristicAI.chooseBid with a strong hand produces a numeric BID.
+cases.push({
+  name: 'HeuristicAI.chooseBid (strong hand) produces a numeric BID',
+  fn: () => {
+    const deck = buildDeck();
+    // 4 Jacks — extremely strong hand.
+    const hand = ['JH', 'JD', 'JS', 'JC'].map(id => deck.find(c => c.id === id)!);
+    const view: BiddingView = {
+      myId: 'p0',
+      myHand: hand,
+      currentHighestBid: null,
+      minNextBid: 150,
+      passesSinceLastBid: 0,
+      thanniEligible: true,
+      balance: 0,
+    };
+    const choice = new HeuristicAI().chooseBid(view);
+    assertEq('choice.kind', choice.kind, 'BID');
+    if (choice.kind !== 'BID') throw new Error('unreachable');
+    assertEq('choice.amount >= MIN_BEAT', choice.amount >= 150, true);
+    assertEq('choice.amount <= 328', choice.amount <= 328, true);
+  },
+});
+
+// Case 31: HeuristicAI.chooseBid with a weak hand produces PASS.
+cases.push({
+  name: 'HeuristicAI.chooseBid (weak hand) produces PASS',
+  fn: () => {
+    const deck = buildDeck();
+    const hand = ['QH', 'QD', 'QS', 'QC'].map(id => deck.find(c => c.id === id)!);
+    const view: BiddingView = {
+      myId: 'p0',
+      myHand: hand,
+      currentHighestBid: { amount: 170, kind: 'STANDARD', playerId: 'p1', displayName: '70', timestamp: Date.now() },
+      minNextBid: 180,
+      passesSinceLastBid: 1,
+      thanniEligible: false,
+      balance: 0,
+    };
+    const choice = new HeuristicAI().chooseBid(view);
+    assertEq('choice.kind (PASS)', choice.kind, 'PASS');
+  },
+});
+
+// Case 32: getAIStrategy returns a strategy for each seat.
+cases.push({
+  name: 'getAIStrategy returns HeuristicAI for legacy / heuristic / mcts / ga',
+  fn: () => {
+    resetAIMode();
+    assertEq('isDefaultMode', isDefaultMode(), true);
+    const legacy = getAIStrategy('p0');
+    assertEq('legacy impl name', legacy.name, 'HeuristicAI');
+    setAISeatMode('p0', 'heuristic');
+    const heur = getAIStrategy('p0');
+    assertEq('heuristic impl name', heur.name, 'HeuristicAI');
+    setAISeatMode('p0', 'mcts'); // placeholder still returns HeuristicAI
+    const mcts = getAIStrategy('p0');
+    assertEq('mcts placeholder name', mcts.name, 'HeuristicAI');
+    setAISeatMode('p0', 'ga');
+    const ga = getAIStrategy('p0');
+    assertEq('ga placeholder name', ga.name, 'HeuristicAI');
+    resetAIMode();
+  },
+});
+
+// Case 33: Feature flag default mode + override + reset.
+cases.push({
+  name: 'Feature flag: default → override → reset cycle works',
+  fn: () => {
+    resetAIMode();
+    assertEq('default p0 mode', getAISeatMode('p0'), 'legacy');
+    assertEq('isDefaultMode at start', isDefaultMode(), true);
+    setAISeatMode('p0', 'mcts');
+    assertEq('p0 after mcts set', getAISeatMode('p0'), 'mcts');
+    assertEq('isDefaultMode after override', isDefaultMode(), false);
+    resetAIMode();
+    assertEq('p0 after reset', getAISeatMode('p0'), 'legacy');
+    assertEq('isDefaultMode after reset', isDefaultMode(), true);
+  },
+});
+
+// Case 34: simulateAction with PLAY advances the trick pile deterministically.
+cases.push({
+  name: 'simulateAction (PLAY) advances GameState trick pile',
+  fn: () => {
+    let state = createInitialState('p1');
+    state = transitionToBiddingPhase1(state);
+    // Force status to PLAYING + set turn to first bidder for the test.
+    state = {
+      ...state,
+      status: 'PLAYING',
+      currentTrickNumber: 1,
+      currentLeadPlayerId: 'p2',
+      trickPile: [],
+    };
+    const p2Hand = state.players.get('p2')!.hand;
+    if (p2Hand.length === 0) throw new Error('p2 hand empty');
+    const next = simulateAction(state, { kind: 'PLAY', playerId: 'p2', card: p2Hand[0] });
+    assertEq('pile length after play', next.trickPile.length, 1);
+    assertEq('played card id', next.trickPile[0].card.id, p2Hand[0].id);
+    assertEq('player hand shrunk', next.players.get('p2')!.hand.length, p2Hand.length - 1);
+  },
+});
+
+// Case 35: simulateAction with PASS increments passesSinceLastBid.
+cases.push({
+  name: 'simulateAction (PASS) increments passesSinceLastBid',
+  fn: () => {
+    let state = createInitialState('p1');
+    // First bidder is left of dealer (p2).
+    const next = simulateAction(state, { kind: 'PASS', playerId: state.biddingState.currentPlayerToBid });
+    assertEq('passesSinceLastBid after PASS', next.biddingState.passesSinceLastBid, 1);
+    assertEq('thanniEligible for passing player', next.biddingState.thanniEligible['p2'], false);
+  },
+});
+
+// Case 36: simulateAction ignores illegal actions (returns state unchanged by reference).
+cases.push({
+  name: 'simulateAction (illegal PLAY) returns input state unchanged',
+  fn: () => {
+    let state = createInitialState('p1');
+    state = transitionToBiddingPhase1(state);
+    state = {
+      ...state,
+      status: 'PLAYING',
+      currentTrickNumber: 1,
+      currentLeadPlayerId: 'p2',
+      trickPile: [],
+    };
+    // p1 tries to play out of turn (lead is p2). Should be a no-op.
+    const p1Hand = state.players.get('p1')!.hand;
+    const next = simulateAction(state, { kind: 'PLAY', playerId: 'p1', card: p1Hand[0] });
+    assertEq('returned state identity (illegal)', next === state, true);
   },
 });
 

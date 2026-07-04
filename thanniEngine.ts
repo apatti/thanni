@@ -1766,6 +1766,65 @@ export interface GameActionResult {
 }
 
 /**
+ * Discriminated union of all game actions. Used by `simulateAction` — a pure,
+ * headless `GameState → GameState` dispatcher that wraps the existing engine
+ * primitives (playCard / placeBid / passBid / placeThanniBid /
+ * transitionToHathBandPlaying / transitionToTrumpSet / requestTrumpReveal).
+ *
+ * The dispatcher is the canonical rollout primitive for future MCTS / GA
+ * strategies: a single pure function covering all play modes, side-effect-free.
+ * The React UI loop keeps its own state model; strategies call `simulateAction`
+ * for hypothetical rollouts on a deterministic copy of the engine state.
+ */
+export type GameAction =
+  | { kind: 'PLAY'; playerId: PlayerId; card: Card }
+  | { kind: 'PASS'; playerId: PlayerId }
+  | { kind: 'BID'; playerId: PlayerId; amount: number }
+  | { kind: 'BID_THANNI'; playerId: PlayerId }
+  | { kind: 'CALL_HATH_BAND'; playerId: PlayerId; trumpCardForWinner: Card | null }
+  | { kind: 'SET_TRUMP'; playerId: PlayerId; suit: Suit }
+  | { kind: 'REVEAL_TRUMP'; playerId: PlayerId };
+
+/**
+ * Apply a game action to a GameState, returning the resulting state.
+ * Illegal actions (e.g., playing out of turn, invalid bid amount) return the
+ * input state unchanged — the caller can detect this by comparing references.
+ * Pure: no side effects, no React, no setTimeout.
+ */
+export function simulateAction(state: GameState, action: GameAction): GameState {
+  switch (action.kind) {
+    case 'PLAY': {
+      const r = playCard(state, action.playerId, action.card);
+      return r.error ? state : r.newState;
+    }
+    case 'PASS': {
+      const r = passBid(state.biddingState, action.playerId);
+      if (r.newState === null) return state;
+      return { ...state, biddingState: r.newState };
+    }
+    case 'BID': {
+      const r = placeBid(state.biddingState, action.playerId, action.amount);
+      if (r.newState === null) return state;
+      return { ...state, biddingState: r.newState };
+    }
+    case 'BID_THANNI': {
+      const bidderHand = state.players.get(action.playerId)?.hand ?? [];
+      const r = placeThanniBid(state.biddingState, action.playerId, bidderHand);
+      if (r.newState === null) return state;
+      return transitionToThanniPlaying({ ...state, biddingState: r.newState });
+    }
+    case 'CALL_HATH_BAND':
+      return transitionToHathBandPlaying(state, action.playerId, action.trumpCardForWinner);
+    case 'SET_TRUMP':
+      return transitionToTrumpSet(state, action.suit);
+    case 'REVEAL_TRUMP': {
+      const r = requestTrumpReveal(state, action.playerId);
+      return r.error ? state : r.newState;
+    }
+  }
+}
+
+/**
  * Process a card play action.
  * Validates card is legal, adds to trick pile, checks for trick completion.
  */

@@ -10,7 +10,7 @@ import {
   SUIT_SYMBOLS,
   buildDeck, shuffleDeck, getBidDisplayName,
   evaluateTrickWithContext, sortCards, getLegalCards,
-  MATCH_GOAL,
+  MATCH_GOAL, MIN_BEAT, MAX_BID,
   getNextPlayerClockwise,
   isGuaranteedSweep,
   isHathBandGuaranteedSweep,
@@ -20,6 +20,11 @@ import {
 import { evaluateHand, aiPickCard, computeNextDealer, aiShouldBidThanni, aiShouldCallHathBand } from './thanniAI';
 import { Markdown } from './src/Markdown';
 import rulesMarkdown from './RULES.md?raw';
+import {
+  getAIStrategy, getAISeatMode, getAIMode, isDefaultMode,
+  type CardplayView, type BiddingView,
+} from './src/ai';
+import { AIModeDropdown } from './src/AIModeDropdown';
 
 // ─── Types ────────────────────────────────────────────────────────────
 type GameStatus =
@@ -545,6 +550,10 @@ export default function ThanniGame(): ReactNode {
   const [hathBandPartnerId, setHathBandPartnerId] = useState<string | null>(null);
   const [hathBandOutcome, setHathBandOutcome] = useState<'WON' | 'LOST' | null>(null);
 
+  // AI Mode badge re-render trigger. Bumped by the AIModeDropdown whenever a
+  // seat's strategy changes so the inline status-row badge stays in sync.
+  const [aiModeVersion, setAiModeVersion] = useState(0);
+
   // Trump
   const [trump, setTrump] = useState<Suit | null>(null);
   const [trumpCard, setTrumpCard] = useState<Card | null>(null);
@@ -631,6 +640,50 @@ const blackPts = Math.max(0, -balance);
   const legalFor = useCallback((pid: string) =>
     getLegalCards(gh(pid), pile, trump, trumpOpen, pid, trumpRevealedBy),
     [gh, pile, trump, trumpOpen, trumpRevealedBy]);
+
+  // ─── AI Strategy View Builders ──────────────────────────────────────
+  // Construct read-only snapshots of the game state for the pluggable AI
+  // strategies. In 'legacy' mode (per-seat feature flag), these are never
+  // called — the UI invokes aiPickCard and the inline bidding heuristic
+  // directly. In 'heuristic' / 'mcts' / 'ga' mode, the AI effects route
+  // through getAIStrategy().chooseCard / chooseBid using these views.
+  const buildCardplayView = useCallback((pid: string): CardplayView => {
+    const me = gp(pid);
+    const targetTrickCount = isThanniRound ? 4 : 6;
+    const fullHands = new Map<string, Card[]>();
+    for (const p of players) fullHands.set(p.id, p.hand);
+    return {
+      myId: pid,
+      myHand: me.hand,
+      legal: legalFor(pid),
+      trickPile: pile,
+      trump,
+      trumpOpen,
+      partnerId: me.partnerId,
+      isSoloRound: isThanniRound || isHathBandRound,
+      soloCallerId: isThanniRound ? bidWinner : isHathBandRound ? hathBandCallerId : null,
+      foldedPartnerId: isThanniRound ? thanniPartnerId : isHathBandRound ? hathBandPartnerId : null,
+      tricksRemaining: targetTrickCount - trickNum + 1,
+      fullHands,
+      balance,
+      bidWinner,
+      currentBid: curBid,
+    };
+  }, [gp, legalFor, isThanniRound, isHathBandRound, bidWinner, hathBandCallerId, thanniPartnerId, hathBandPartnerId, trickNum, pile, trump, trumpOpen, players, balance, curBid]);
+
+  const buildBiddingView = useCallback((pid: string): BiddingView => {
+    const cb = curBidRef.current;
+    const minNextBid = cb ? cb.amount + 10 : MIN_BEAT;
+    return {
+      myId: pid,
+      myHand: gh(pid),
+      currentHighestBid: cb,
+      minNextBid,
+      passesSinceLastBid: passesRef.current,
+      thanniEligible: !!thanniEligibleRef.current[pid],
+      balance,
+    };
+  }, [gh, balance]);
 
   // ─── LOBBY / CARD-PICK HANDLERS ───
   const handleStartGame = useCallback(() => {
@@ -800,29 +853,44 @@ const blackPts = Math.max(0, -balance);
     setCurBidder(getNextPlayerClockwise(pid));
   }, [dealerId, pName]);
 
-  // AI bidding effect — consider Thanni first; otherwise scale 4-card hand eval to estimate 6-card strength
+  // AI bidding effect — consider Thanni first; otherwise route the numeric-bid
+  // decision through the per-seat AI strategy (or the legacy inline heuristic).
   useEffect(() => {
     if (status !== 'BIDDING_PHASE1' || curBidder === PID || bidWinner) return;
     const t = setTimeout(() => {
       const hand = gh(curBidder);
       const cb = curBidRef.current;
       // Thanni: only on AI's first action this round AND only if not a guaranteed sweep (must carry real risk).
+      // Always handled by the heuristic — strategies don't see Thanni decisions.
       if (thanniEligibleRef.current[curBidder] && aiShouldBidThanni(hand) && !isGuaranteedSweep(hand)) {
         doThanniBid(curBidder);
         return;
       }
-      const eval4 = evaluateHand(hand);
-      const projectedPoints = Math.round(eval4.adjustedScore * 1.5);
-      const minA = cb ? cb.amount + 10 : 150;
-      if (projectedPoints >= minA && minA <= 328) {
-        const bidAmt = Math.max(minA, Math.ceil(projectedPoints / 10) * 10);
-        bidAmt <= 328 ? doBid(curBidder, Math.min(bidAmt, 328)) : doPass(curBidder);
+      // Feature-flag dispatch: 'legacy' bypasses the registry and inlines the
+      // bidding heuristic (byte-identical to pre-refactor). Other modes route
+      // through getAIStrategy().chooseBid with a BiddingView.
+      const seatMode = getAISeatMode(curBidder);
+      if (seatMode === 'legacy') {
+        const eval4 = evaluateHand(hand);
+        const projectedPoints = Math.round(eval4.adjustedScore * 1.5);
+        const minA = cb ? cb.amount + 10 : 150;
+        if (projectedPoints >= minA && minA <= 328) {
+          const bidAmt = Math.max(minA, Math.ceil(projectedPoints / 10) * 10);
+          bidAmt <= 328 ? doBid(curBidder, Math.min(bidAmt, 328)) : doPass(curBidder);
+        } else {
+          doPass(curBidder);
+        }
       } else {
-        doPass(curBidder);
+        const choice = getAIStrategy(curBidder).chooseBid(buildBiddingView(curBidder));
+        if (choice.kind === 'BID' && choice.amount > 0) {
+          doBid(curBidder, Math.min(choice.amount, MAX_BID));
+        } else {
+          doPass(curBidder);
+        }
       }
     }, 800 + Math.random() * 700);
     return () => clearTimeout(t);
-  }, [status, curBidder, curBid, bidWinner, gh, doBid, doPass, doThanniBid]);
+  }, [status, curBidder, curBid, bidWinner, gh, doBid, doPass, doThanniBid, buildBiddingView]);
 
   // Bidding complete → trump selection (BEFORE dealing last 2 cards per PRD)
   useEffect(() => {
@@ -1155,14 +1223,21 @@ const blackPts = Math.max(0, -balance);
       if (!hand.length) return;
       const legal = legalFor(turnPlayer);
       if (!legal.length) return;
-      const me = gp(turnPlayer);
-      // In a solo round there is no trump and the partner is folded — opponents
-      // just play to win. aiPickCard with no trump handles this natively.
-      const pick = aiPickCard(legal, pile, turnPlayer, me.partnerId, isSoloRound ? false : trumpOpen, isSoloRound ? null : trump);
+      // Feature-flag dispatch: 'legacy' bypasses the registry and calls
+      // aiPickCard directly (byte-identical to pre-refactor behavior). Any
+      // other mode routes through getAIStrategy().chooseCard with a full view.
+      const seatMode = getAISeatMode(turnPlayer);
+      let pick: Card;
+      if (seatMode === 'legacy') {
+        const me = gp(turnPlayer);
+        pick = aiPickCard(legal, pile, turnPlayer, me.partnerId, isSoloRound ? false : trumpOpen, isSoloRound ? null : trump);
+      } else {
+        pick = getAIStrategy(turnPlayer).chooseCard(buildCardplayView(turnPlayer));
+      }
       playCard(turnPlayer, pick);
     }, 600 + Math.random() * 800);
     return () => clearTimeout(t);
-  }, [status, turnPlayer, pile.length, gh, legalFor, playCard, trump, trumpOpen, gp, isSoloRound, foldedPartnerId]);
+  }, [status, turnPlayer, pile.length, gh, legalFor, playCard, trump, trumpOpen, gp, isSoloRound, foldedPartnerId, buildCardplayView]);
 
   const isInteractiveStatus = status === 'PLAYING' || status === 'TRUMP_REVEALED' || status === 'THANNI_PLAYING' || status === 'HATH_BAND_PLAYING';
   const legalIds = isInteractiveStatus && isMy
@@ -1210,14 +1285,24 @@ const blackPts = Math.max(0, -balance);
       <div className="w-full max-w-4xl mx-auto mb-2">
         <div className="flex items-center justify-between">
           <h1 className="text-xl sm:text-2xl font-bold text-yellow-400 drop-shadow-lg">THANNI</h1>
-          <button onClick={() => setShowRules(true)}
-            className="text-xs sm:text-sm text-blue-300 hover:text-blue-200 underline">Rules</button>
+          <div className="flex items-center">
+            <AIModeDropdown onChange={() => setAiModeVersion(v => v + 1)} />
+            <button onClick={() => setShowRules(true)}
+              className="text-xs sm:text-sm text-blue-300 hover:text-blue-200 underline">Rules</button>
+          </div>
         </div>
         <div className="flex items-center justify-center gap-2 mt-1 text-xs sm:text-sm text-gray-300 flex-wrap">
           <span>Status: <strong className="text-yellow-300">{status}</strong></span>
           {trump && !trumpDown && <span className="text-red-400 font-bold">Trump: {SUIT_SYMBOLS[trump]}</span>}
           <span>Trick: {trickNum}/{isThanniRound ? 4 : 6}{isThanniRound ? ' · THANNI' : isHathBandRound ? ' · HATH BAND' : ''}</span>
           <span>Dealer: {pName(dealerId)}</span>
+          {/* AI Mode badge — only visible when at least one AI seat is non-default. */}
+          {(() => { void aiModeVersion; // re-render trigger
+            if (isDefaultMode()) return null;
+            const m = getAIMode();
+            const tags = (['p0', 'p1', 'p3'] as string[]).filter(s => m[s] !== 'legacy').map(s => `${s}:${m[s]}`).join(' · ');
+            return <span className="text-[10px] sm:text-xs italic text-purple-300 ml-2">AI: {tags}</span>;
+          })()}
         </div>
       </div>
 
