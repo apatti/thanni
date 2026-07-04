@@ -264,6 +264,60 @@ function RulesModal({ onClose }: { onClose: () => void }): ReactNode {
   );
 }
 
+// ─── Thanni Result Modal (shown when a Thanni round ends) ─────────────
+// Rendered when a Thanni round ends. The human face and AI face express
+// opposite emotions depending on whether the user's team made or missed
+// the bid. The "Next Hand" button triggers the regular post-round flow.
+function ThanniResultModal({ outcome, tricksTaken, totalTricks, onNext, isMatchOver }: {
+  outcome: 'WON' | 'LOST';
+  tricksTaken: number;
+  totalTricks: number;
+  onNext: () => void;
+  isMatchOver: boolean;
+}): ReactNode {
+  const won = outcome === 'WON';
+  const containerClasses = won
+    ? 'bg-gradient-to-br from-emerald-800 to-green-950 border-emerald-400/60'
+    : 'bg-gradient-to-br from-red-950 to-rose-900 border-red-500/60';
+  const titleColor = won ? 'text-emerald-300' : 'text-red-300';
+  const subtitle = won
+    ? `You swept all ${totalTricks} tricks solo — Thanni made! Bidding team gains +${THANNI_WIN_POINTS} match points.`
+    : `Bidder took only ${tricksTaken}/${totalTricks} tricks — Thanni missed. Opposition gains +${THANNI_FAIL_PENALTY} match points.`;
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/85 backdrop-blur-sm p-4">
+      <div className={`rounded-2xl shadow-2xl border-2 max-w-md w-full p-6 text-center ${containerClasses}`}>
+        {/* The two faces: human + AI on opposite emotional poles */}
+        <div className="flex items-center justify-center gap-6 mb-3">
+          {/* Human */}
+          <div className="flex flex-col items-center">
+            <div className={`text-6xl sm:text-7xl leading-none ${won ? 'animate-bounce' : ''}`}>
+              {won ? '🤩' : '😢'}
+            </div>
+            <span className="text-xs mt-2 text-gray-300 font-semibold tracking-wider">YOU</span>
+          </div>
+          {/* Versus divider */}
+          <span className="text-2xl text-gray-500 font-black">VS</span>
+          {/* AI / Computer */}
+          <div className="flex flex-col items-center">
+            <div className={`text-6xl sm:text-7xl leading-none ${won ? '' : 'animate-pulse'}`}>
+              {won ? '🤖' : '🤖😈'}
+            </div>
+            <span className="text-xs mt-2 text-gray-300 font-semibold tracking-wider">AI</span>
+          </div>
+        </div>
+        <h2 className={`text-2xl sm:text-3xl font-black mb-2 ${titleColor}`}>
+          {won ? 'YOU WON THANNI!' : 'YOU HAVE LOST THE THANNI'}
+        </h2>
+        <p className="text-sm text-gray-300 mb-5 leading-relaxed">{subtitle}</p>
+        <button onClick={onNext}
+          className={`px-6 py-2 ${won ? 'bg-emerald-600 hover:bg-emerald-500' : 'bg-red-600 hover:bg-red-500'} text-white text-sm font-bold rounded-lg shadow transition-all active:scale-95`}>
+          {isMatchOver ? 'See Match Result' : 'Next Hand'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ─── Match Over Modal ──────────────────────────────────────────────────
 function MatchOverModal({ winner, redPoints, blackPoints, pName, onNewMatch }: {
   winner: Team; redPoints: number; blackPoints: number;
@@ -468,6 +522,10 @@ export default function ThanniGame(): ReactNode {
   const thanniEligibleRef = useRef<Record<string, boolean>>({ p0: true, p1: true, p2: true, p3: true });
   const [isThanniRound, setIsThanniRound] = useState(false);
   const [thanniPartnerId, setThanniPartnerId] = useState<string | null>(null);
+  // Result of a just-finished Thanni round, from the human's perspective.
+  // 'WON' = the human's team won the Thanni; 'LOST' = the human's team lost it.
+  // Set in scoreRound when a Thanni round ends; cleared on the next deal.
+  const [thanniOutcome, setThanniOutcome] = useState<'WON' | 'LOST' | null>(null);
 
   // Trump
   const [trump, setTrump] = useState<Suit | null>(null);
@@ -602,7 +660,7 @@ const blackPts = Math.max(0, -balance);
     setBidWinner(null); setBidLog([]); setBidActions({});
     setThanniEligible({ p0: true, p1: true, p2: true, p3: true });
     thanniEligibleRef.current = { p0: true, p1: true, p2: true, p3: true };
-    setIsThanniRound(false); setThanniPartnerId(null);
+    setIsThanniRound(false); setThanniPartnerId(null); setThanniOutcome(null);
     setTrump(null); setTrumpCard(null); setTrumpDown(true); setTrumpOpen(false);
     setShowPick(false); setTrumpRevealedBy(null);
     setTrickNum(0); setTurnPlayer(null); setPile([]); setResults([]);
@@ -630,7 +688,7 @@ const blackPts = Math.max(0, -balance);
     setPasses(0); passesRef.current = 0; setBidLog([]); setBidActions({});
     setThanniEligible({ p0: true, p1: true, p2: true, p3: true });
     thanniEligibleRef.current = { p0: true, p1: true, p2: true, p3: true };
-    setIsThanniRound(false); setThanniPartnerId(null);
+    setIsThanniRound(false); setThanniPartnerId(null); setThanniOutcome(null);
     setTrump(null); setTrumpCard(null); setTrumpDown(true); setTrumpOpen(false); setShowPick(false); setTrumpRevealedBy(null);
     setTrickNum(0); setTurnPlayer(null); setPile([]); setResults([]); setRoundMsg(null);
     voidCheckRef.current = false; setShowVoidModal(false); setVoidReason('');
@@ -845,12 +903,13 @@ const blackPts = Math.max(0, -balance);
     let gainTeam: Team;
     let gainAmount: number;
     let resultLabel: string;
+    let thanniMade = false;
     if (isThanni) {
       const targetTricks = isThanniRound ? 4 : 6;
-      const met = bidderTricksWon >= targetTricks;
-      gainTeam = met ? bt : (bt === 'RED' ? 'BLACK' : 'RED');
-      gainAmount = met ? THANNI_WIN_POINTS : THANNI_FAIL_PENALTY;
-      resultLabel = `${bt} ${met ? 'made' : 'missed'} Thanni — bidder took ${bidderTricksWon}/${targetTricks} tricks.`;
+      thanniMade = bidderTricksWon >= targetTricks;
+      gainTeam = thanniMade ? bt : (bt === 'RED' ? 'BLACK' : 'RED');
+      gainAmount = thanniMade ? THANNI_WIN_POINTS : THANNI_FAIL_PENALTY;
+      resultLabel = `${bt} ${thanniMade ? 'made' : 'missed'} Thanni — bidder took ${bidderTricksWon}/${targetTricks} tricks.`;
     } else {
       const met = btp >= cf.amount;
       const hv = cf.amount >= 200;
@@ -866,6 +925,13 @@ const blackPts = Math.max(0, -balance);
     setBalance(newBalance);
     if (nrp > 0) setRedFaceUp(true);
     if (nbp > 0) setBlackFaceUp(true);
+
+    // For a Thanni round, capture the user's perspective (WON / LOST) so the
+    // result modal can render with the appropriate happy/sad faces.
+    if (isThanni) {
+      const userWon = (bt === 'RED') === thanniMade; // RED is the user's team (PID = 'p2').
+      setThanniOutcome(userWon ? 'WON' : 'LOST');
+    }
 
     const rm = `${resultLabel} Red ${rp}pts, Black ${bp}pts. Match: Red ${nrp}, Black ${nbp}.`;
     setRoundMsg(rm); setMsg(rm);
@@ -906,13 +972,19 @@ const blackPts = Math.max(0, -balance);
         const nr = [...results, res];
         setResults(nr);
         setMsg(`${pName(res.winnerPlayerId)} wins trick ${trickNum} (+${tot}pts)!`);
+        // Thanni early-termination: the bidder must win every trick. If they lose
+        // even one, the round ends immediately — skip the "next trick" continuation
+        // and jump straight to scoring with the partial trick history.
+        const bidderLostTrick = isThanniRound && bidWinner !== null && res.winnerPlayerId !== bidWinner;
         setTimeout(() => {
           setPile([]);
-          if (trickNum < totalTricks) {
+          if (!bidderLostTrick && trickNum < totalTricks) {
             setTrickNum(n => n + 1);
             setTurnPlayer(res.winnerPlayerId);
             setMsg(`Trick ${trickNum + 1}. ${pName(res.winnerPlayerId)} leads.`);
-          } else scoreRound(nr);
+          } else {
+            scoreRound(nr);
+          }
         }, 1500);
       }, 800);
     } else {
@@ -920,7 +992,7 @@ const blackPts = Math.max(0, -balance);
       setTurnPlayer(next);
       if (next === PID) setMsg('Your turn — play a card.');
     }
-  }, [setHand, gh, trickNum, pile, trump, trumpOpen, results, addStats, scoreRound, pName, isThanniRound, thanniPartnerId]);
+  }, [setHand, gh, trickNum, pile, trump, trumpOpen, results, addStats, scoreRound, pName, isThanniRound, thanniPartnerId, bidWinner]);
 
   const userPlay = useCallback((card: Card) => {
     if (turnPlayer !== PID || (status !== 'PLAYING' && status !== 'TRUMP_REVEALED' && status !== 'THANNI_PLAYING')) return;
@@ -1206,7 +1278,7 @@ const blackPts = Math.max(0, -balance);
           })()}
 
           <div className="flex flex-wrap justify-center gap-2 mt-2 w-full max-w-md">
-            {status === 'ROUND_SCORED' && (
+            {status === 'ROUND_SCORED' && !thanniOutcome && (
               <button onClick={() => deal()}
                 className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold rounded-lg shadow transition-all active:scale-95">
                 Next Hand
@@ -1236,7 +1308,7 @@ const blackPts = Math.max(0, -balance);
 
       {/* Footer */}
       <div className="w-full max-w-2xl mx-auto py-3 flex justify-center gap-3 flex-wrap border-t border-gray-700 mt-4 pt-3">
-        {status === 'ROUND_SCORED' && (
+        {status === 'ROUND_SCORED' && !thanniOutcome && (
           <button onClick={() => deal()}
             className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold rounded-lg shadow transition-all active:scale-95">
             Next Hand
@@ -1350,6 +1422,22 @@ const blackPts = Math.max(0, -balance);
             blackPoints={blackPts}
             pName={pName}
             onNewMatch={handleNewMatch}
+          />
+        );
+      })()}
+
+      {/* Thanni Result Modal — shown after a Thanni round ends (and the match
+          hasn't ended). Renders with happy/sad human + AI faces based on the
+          user's perspective (PID is RED, so RED's success = user's success). */}
+      {status === 'ROUND_SCORED' && thanniOutcome && (() => {
+        const tricksTaken = bidWinner ? gp(bidWinner).tricksWon : 0;
+        return (
+          <ThanniResultModal
+            outcome={thanniOutcome}
+            tricksTaken={tricksTaken}
+            totalTricks={isThanniRound ? 4 : 6}
+            onNext={() => deal()}
+            isMatchOver={false}
           />
         );
       })()}
