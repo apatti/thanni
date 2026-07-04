@@ -16,6 +16,8 @@ import {
   THANNI_BID_AMOUNT, THANNI_WIN_POINTS, THANNI_FAIL_PENALTY,
 } from './thanniEngine';
 import { evaluateHand, aiPickCard, computeNextDealer, aiShouldBidThanni } from './thanniAI';
+import { Markdown } from './src/Markdown';
+import rulesMarkdown from './RULES.md?raw';
 
 // ─── Types ────────────────────────────────────────────────────────────
 type GameStatus =
@@ -237,13 +239,11 @@ function BidPanel({ cur, my, est, thanniEligible, thanniBlocked, onBid, onThanni
 }
 
 // ─── Rules Modal ──────────────────────────────────────────────────────
+// Rules content lives in RULES.md at the repo root (GitHub-discoverable) and
+// is loaded here via Vite's `?raw` import. `Markdown` is a minimal renderer
+// (no new dependency) that handles headings, bullets, numbered items, and
+// auto-colors the words RED / BLACK / Thanni.
 function RulesModal({ onClose }: { onClose: () => void }): ReactNode {
-  const Section = ({ title, children }: { title: string; children: ReactNode }) => (
-    <div>
-      <h3 className="text-yellow-400 font-bold text-sm sm:text-base mb-1">{title}</h3>
-      <div className="text-gray-300 text-xs sm:text-sm leading-relaxed space-y-1">{children}</div>
-    </div>
-  );
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" onClick={onClose}>
       <div className="bg-gradient-to-br from-gray-800 to-gray-900 rounded-2xl shadow-2xl border-2 border-yellow-500/50 max-w-2xl w-full max-h-[85vh] overflow-y-auto p-5 sm:p-6" onClick={e => e.stopPropagation()}>
@@ -252,74 +252,7 @@ function RulesModal({ onClose }: { onClose: () => void }): ReactNode {
           <button onClick={onClose} aria-label="Close"
             className="text-gray-400 hover:text-white text-2xl font-bold w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-700 transition-all">×</button>
         </div>
-        <div className="space-y-5">
-          <Section title="Players & Teams">
-            <p>• 4 players form 2 fixed teams: <strong className="text-red-400">RED</strong> (You + Arjun, North/South seats) vs <strong className="text-gray-200">BLACK</strong> (Vikram + Priya, East/West seats).</p>
-            <p>• Teammates sit across from each other. The seat that deals rotates based on who is trailing.</p>
-          </Section>
-          <Section title="The Deck & Point Values">
-            <p>• 24-card deck: 4 suits (♥ ♦ ♠ ♣) × 6 values: A, K, Q, J, 10, 9.</p>
-            <p>• <strong>Point values:</strong> J = 30 · 9 = 20 · A = 11 · 10 = 10 · K = 6 · Q = 5.</p>
-            <p>• Total points in play each round: <strong>328</strong>.</p>
-          </Section>
-          <Section title="Round Flow">
-            <p>1. Dealer deals <strong>4 cards</strong> to each player (16 of 24 cards).</p>
-            <p>2. Bidding phase: players bid on how many points their team commits to win.</p>
-            <p>3. Highest bidder picks the <strong>Trump suit</strong> by selecting a card from their hand and placing it face-down.</p>
-            <p>4. Remaining <strong>2 cards</strong> are dealt (now 6 cards each).</p>
-            <p>5. Six tricks are played — player to the left of dealer leads trick #1. Trick winner leads the next.</p>
-            <p>6. After 6 tricks, round is scored and match points are applied.</p>
-            <p>7. First team to reach <strong>12 match points</strong> wins the match.</p>
-          </Section>
-          <Section title="Bidding">
-            <p>• <strong>Beat (150)</strong> is the minimum bid. If all 4 players pass, the first bidder is forced to bid Beat.</p>
-            <p>• Bids go up in 10s: 150 → 160 ("60") → 170 ("70") → 200 ("John") → 210 ("John 10") → 220 ("John 20") → up to 328.</p>
-            <p>• Bidding ends when 3 players pass after someone has bid. That bidder's team wins the contract.</p>
-            <p>• You can only bid higher than the current highest bid.</p>
-          </Section>
-          <Section title="Thanni (the solo all-tricks bid)">
-            <p>• A player may bid <strong className="text-purple-300">Thanni</strong> only as their <strong>first action</strong> this round — passing or bidding any other amount removes the option.</p>
-            <p>• A Thanni bid ends bidding immediately. The phase-2 deal and trump selection are skipped — only the original <strong>4 phase-1 cards</strong> are played, in <strong>4 tricks</strong>, with <strong>no trump</strong>.</p>
-            <p>• The Thanni bidder's <strong>partner is folded</strong> and does not play. The bidder plays solo 1-vs-2 against the two opponents and must <strong>win all 4 tricks</strong>.</p>
-            <p>• The Thanni bidder <strong>leads every trick</strong> (since they win each one).</p>
-            <p>• <strong className="text-green-300">Make</strong> (win all 4 tricks): bidding team gets <strong>+4 match points</strong>.</p>
-            <p>• <strong className="text-red-300">Miss</strong> (lose any trick): bidding team loses <strong>−8 match points</strong> AND the opposition gains <strong>+8 match points</strong> (floored at 0).</p>
-            <p>• Thanni is disallowed if the bidder's 4 cards <em>guarantee</em> a sweep against every possible opponent deal — the bid must carry genuine risk.</p>
-          </Section>
-          <Section title="Trick Play">
-            <p>• You <strong>must follow the led suit</strong> if you have a card of that suit.</p>
-            <p>• If you cannot follow suit, you may either play any card or request the <strong>Trump Reveal</strong>.</p>
-            <p>• Trick winner = highest card of the led suit, unless a trump was played (then highest trump wins).</p>
-          </Section>
-          <Section title="Trump Reveal (special mechanic)">
-            <p>• The trump card remains <strong>face-down</strong> at the start of the round — its suit is hidden from everyone.</p>
-            <p>• Once per round, a player who cannot follow suit may request the reveal: the card turns face-up and is <strong>returned to the bid winner's hand</strong>.</p>
-            <p>• The player who requested the reveal <strong>MUST play a trump</strong> if they have one after the reveal.</p>
-            <p>• After a reveal, the trump suit is public knowledge for the rest of the round.</p>
-            <p>• There is <strong>no trump</strong> in a Thanni round, so this mechanic never applies there.</p>
-          </Section>
-          <Section title="Scoring (Match Points)">
-            <p>• <strong>Standard bid (Beat, 60, 70 — below 200):</strong></p>
-            <p>  – Team <strong>makes</strong> their bid: +1 match point (or opponent −1 if scoring card face-down).</p>
-            <p>  – Team <strong>misses</strong>: opponent gets +2 (or bidding team −2 if face-down).</p>
-            <p>• <strong>High-value bid (John / John 10 / John 20 — 200+):</strong></p>
-            <p>  – Team <strong>makes</strong> their bid: +2 match points (or opponent −2 if face-down).</p>
-            <p>  – Team <strong>misses</strong>: opponent gets +4 (or bidding team −4 if face-down).</p>
-            <p>• <strong className="text-purple-300">Thanni bid:</strong></p>
-            <p>  – Team <strong>makes</strong> (all 4 tricks): +4 match points to the bidding team.</p>
-            <p>  – Team <strong>misses</strong>: bidding team −8 AND opposition +8.</p>
-          </Section>
-          <Section title="Scoreboard — 6-Card Deck">
-            <p>• Each team has a virtual 6-card scoreboard, all face-down at the start.</p>
-            <p>• The first team to score flips their scoring card <strong>face-up</strong>.</p>
-            <p>• Dealer rotation: the team whose card is still face-down keeps dealing until they score and flip theirs.</p>
-            <p>• Once both teams have face-up cards, the dealer rotates clockwise each round.</p>
-          </Section>
-          <Section title="Winning">
-            <p>• The first team to reach <strong>12 match points</strong> wins the match.</p>
-            <p>• Tap the trophy card next to your hand to review tricks your team has won this round.</p>
-          </Section>
-        </div>
+        <Markdown content={rulesMarkdown} />
         <div className="flex justify-center mt-6 pt-4 border-t border-gray-700 sticky bottom-0 bg-gradient-to-br from-gray-800 to-gray-900 -mx-5 sm:-mx-6 px-5 sm:px-6">
           <button onClick={onClose}
             className="px-6 py-2 bg-yellow-600 hover:bg-yellow-500 text-white text-sm font-bold rounded-lg shadow transition-all active:scale-95">
