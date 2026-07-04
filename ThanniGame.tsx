@@ -3,7 +3,7 @@
  * @version 4.0.0 — Lobby screen, Rules modal, Card-pick for first dealer
  */
 
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import type { ReactNode } from 'react';
 import {
   Bid, PlayedCard, Card, Suit, TrickResult,
@@ -12,13 +12,15 @@ import {
   evaluateTrickWithContext, sortCards, getLegalCards,
   MATCH_GOAL,
   getNextPlayerClockwise,
+  isGuaranteedSweep,
+  THANNI_BID_AMOUNT, THANNI_WIN_POINTS, THANNI_FAIL_PENALTY,
 } from './thanniEngine';
-import { evaluateHand, aiPickCard, computeNextDealer } from './thanniAI';
+import { evaluateHand, aiPickCard, computeNextDealer, aiShouldBidThanni } from './thanniAI';
 
 // ─── Types ────────────────────────────────────────────────────────────
 type GameStatus =
   | 'LOBBY' | 'BIDDING_PHASE1' | 'BIDDING_PHASE2'
-  | 'TRUMP_SET' | 'PLAYING' | 'TRUMP_REVEALED'
+  | 'TRUMP_SET' | 'PLAYING' | 'TRUMP_REVEALED' | 'THANNI_PLAYING'
   | 'ROUND_SCORED' | 'MATCH_OVER';
 
 type Team = 'RED' | 'BLACK';
@@ -156,9 +158,21 @@ function ScoreBoard({ red, black }: { red: { points: number; isFaceUp: boolean }
   );
 }
 
+// ─── Bid-action label badge class (PASS / numeric / THANNI) ──────────
+function bidBadgeClass(action: string): string {
+  if (action === 'PASS') return 'bg-red-900/50 text-red-300';
+  if (action === 'THANNI') return 'bg-purple-900/70 text-purple-200 ring-1 ring-purple-400/40';
+  return 'bg-blue-900/50 text-blue-300';
+}
+
 // ─── Bidding Panel ────────────────────────────────────────────────────
-function BidPanel({ cur, my, est, onBid, onPass }: {
-  cur: Bid | null; my: boolean; est: number; onBid: (n: number) => void; onPass: () => void;
+function BidPanel({ cur, my, est, thanniEligible, thanniBlocked, onBid, onThanni, onPass }: {
+  cur: Bid | null; my: boolean; est: number;
+  thanniEligible: boolean;
+  thanniBlocked: boolean; // true = sweep is guaranteed → disallow
+  onBid: (n: number) => void;
+  onThanni: () => void;
+  onPass: () => void;
 }): ReactNode {
   const [more, setMore] = useState(false);
   const min = cur ? cur.amount + 10 : 150;
@@ -175,6 +189,10 @@ function BidPanel({ cur, my, est, onBid, onPass }: {
     );
   };
 
+  // Thanni is offered only on the player's FIRST bid action this round AND only
+  // if their 4-card phase-1 hand is NOT a guaranteed sweep (genuine risk required).
+  const canThanni = my && thanniEligible && !thanniBlocked;
+
   return (
     <div className="w-full max-w-lg mx-auto bg-gradient-to-br from-gray-800 to-gray-900 rounded-xl p-3 sm:p-4 shadow-2xl border border-gray-700">
       <div className="flex items-center justify-between mb-2">
@@ -184,9 +202,24 @@ function BidPanel({ cur, my, est, onBid, onPass }: {
       <div className="bg-gray-700/50 rounded-lg p-2 mb-3 text-center">
         <span className="text-xs text-gray-400 mr-1">Current Bid:</span>
         <span className="text-sm sm:text-base font-bold text-yellow-400">
-          {cur ? `${getBidDisplayName(cur.amount)} (${cur.amount})` : 'None'}
+          {cur ? `${getBidDisplayName(cur.amount, cur.kind)}${cur.kind === 'STANDARD' ? ` (${cur.amount})` : ''}` : 'None'}
         </span>
       </div>
+      {/* Thanni bid button — only on first action this round */}
+      <button
+        disabled={!canThanni}
+        onClick={() => canThanni && onThanni()}
+        title={thanniEligible && thanniBlocked ? 'Hand is a guaranteed sweep — Thanni requires at least 1% risk' : 'Bid Thanni — win all 4 tricks with no trump, partner folded. +4 / −8 (and opp +8)'}
+        className={`w-full py-2 px-3 mb-2 rounded-lg font-extrabold text-xs sm:text-sm transition-all duration-150 active:scale-95 flex items-center justify-center gap-2 ${canThanni ? 'bg-gradient-to-r from-purple-700 to-fuchsia-700 hover:from-purple-600 hover:to-fuchsia-600 text-white shadow-lg cursor-pointer' : 'bg-gray-700 text-gray-500 cursor-not-allowed'}`}>
+        <span className="text-yellow-300">★</span>
+        Thanni
+        <span className="text-[10px] sm:text-xs opacity-90">(win all 4 tricks · no trump · partner folded)</span>
+        <span className="text-green-300">+{THANNI_WIN_POINTS}</span>
+        <span className="text-red-300">/ −{THANNI_FAIL_PENALTY}</span>
+        {my && thanniEligible && thanniBlocked && (
+          <span className="text-[10px] text-yellow-400 ml-2">Sweep guaranteed — blocked</span>
+        )}
+      </button>
       <div className="flex flex-wrap gap-1 sm:gap-2 mb-2">{std.slice(0, 3).map(btn)}</div>
       <div className="flex flex-wrap gap-1 sm:gap-2 mb-2">{std.slice(3).map(btn)}</div>
       <button onClick={() => setMore(!more)} className="w-full text-xs text-gray-400 hover:text-white mb-2 transition">
@@ -244,6 +277,15 @@ function RulesModal({ onClose }: { onClose: () => void }): ReactNode {
             <p>• Bidding ends when 3 players pass after someone has bid. That bidder's team wins the contract.</p>
             <p>• You can only bid higher than the current highest bid.</p>
           </Section>
+          <Section title="Thanni (the solo all-tricks bid)">
+            <p>• A player may bid <strong className="text-purple-300">Thanni</strong> only as their <strong>first action</strong> this round — passing or bidding any other amount removes the option.</p>
+            <p>• A Thanni bid ends bidding immediately. The phase-2 deal and trump selection are skipped — only the original <strong>4 phase-1 cards</strong> are played, in <strong>4 tricks</strong>, with <strong>no trump</strong>.</p>
+            <p>• The Thanni bidder's <strong>partner is folded</strong> and does not play. The bidder plays solo 1-vs-2 against the two opponents and must <strong>win all 4 tricks</strong>.</p>
+            <p>• The Thanni bidder <strong>leads every trick</strong> (since they win each one).</p>
+            <p>• <strong className="text-green-300">Make</strong> (win all 4 tricks): bidding team gets <strong>+4 match points</strong>.</p>
+            <p>• <strong className="text-red-300">Miss</strong> (lose any trick): bidding team loses <strong>−8 match points</strong> AND the opposition gains <strong>+8 match points</strong> (floored at 0).</p>
+            <p>• Thanni is disallowed if the bidder's 4 cards <em>guarantee</em> a sweep against every possible opponent deal — the bid must carry genuine risk.</p>
+          </Section>
           <Section title="Trick Play">
             <p>• You <strong>must follow the led suit</strong> if you have a card of that suit.</p>
             <p>• If you cannot follow suit, you may either play any card or request the <strong>Trump Reveal</strong>.</p>
@@ -254,6 +296,7 @@ function RulesModal({ onClose }: { onClose: () => void }): ReactNode {
             <p>• Once per round, a player who cannot follow suit may request the reveal: the card turns face-up and is <strong>returned to the bid winner's hand</strong>.</p>
             <p>• The player who requested the reveal <strong>MUST play a trump</strong> if they have one after the reveal.</p>
             <p>• After a reveal, the trump suit is public knowledge for the rest of the round.</p>
+            <p>• There is <strong>no trump</strong> in a Thanni round, so this mechanic never applies there.</p>
           </Section>
           <Section title="Scoring (Match Points)">
             <p>• <strong>Standard bid (Beat, 60, 70 — below 200):</strong></p>
@@ -262,6 +305,9 @@ function RulesModal({ onClose }: { onClose: () => void }): ReactNode {
             <p>• <strong>High-value bid (John / John 10 / John 20 — 200+):</strong></p>
             <p>  – Team <strong>makes</strong> their bid: +2 match points (or opponent −2 if face-down).</p>
             <p>  – Team <strong>misses</strong>: opponent gets +4 (or bidding team −4 if face-down).</p>
+            <p>• <strong className="text-purple-300">Thanni bid:</strong></p>
+            <p>  – Team <strong>makes</strong> (all 4 tricks): +4 match points to the bidding team.</p>
+            <p>  – Team <strong>misses</strong>: bidding team −8 AND opposition +8.</p>
           </Section>
           <Section title="Scoreboard — 6-Card Deck">
             <p>• Each team has a virtual 6-card scoreboard, all face-down at the start.</p>
@@ -482,6 +528,14 @@ export default function ThanniGame(): ReactNode {
   const [bidLog, setBidLog] = useState<string[]>([]);
   const [bidActions, setBidActions] = useState<Record<string, string>>({});
 
+  // Thanni bid
+  const [thanniEligible, setThanniEligible] = useState<Record<string, boolean>>({
+    p0: true, p1: true, p2: true, p3: true,
+  });
+  const thanniEligibleRef = useRef<Record<string, boolean>>({ p0: true, p1: true, p2: true, p3: true });
+  const [isThanniRound, setIsThanniRound] = useState(false);
+  const [thanniPartnerId, setThanniPartnerId] = useState<string | null>(null);
+
   // Trump
   const [trump, setTrump] = useState<Suit | null>(null);
   const [trumpCard, setTrumpCard] = useState<Card | null>(null);
@@ -550,6 +604,16 @@ export default function ThanniGame(): ReactNode {
   const isMy = turnPlayer === PID;
   const myHand = gh(PID);
 
+  // Sweep pre-check for the human's Thanni bid button — true when the human's
+  // current 4-card phase-1 hand guarantees a sweep against every possible opp deal
+  // (genuine risk required to bid Thanni). Memoized by hand contents.
+  const myHandKey = myHand.map(c => c.id).slice().sort().join(',');
+  const thanniSweepGuaranteedForMe = useMemo(() => {
+    if (myHand.length !== 4) return false;
+    return isGuaranteedSweep(myHand);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [myHandKey]);
+
   const legalFor = useCallback((pid: string) =>
     getLegalCards(gh(pid), pile, trump, trumpOpen, pid, trumpRevealedBy),
     [gh, pile, trump, trumpOpen, trumpRevealedBy]);
@@ -599,6 +663,9 @@ export default function ThanniGame(): ReactNode {
     setPickCards([]);
     setCurBid(null); curBidRef.current = null;
     setBidWinner(null); setBidLog([]); setBidActions({});
+    setThanniEligible({ p0: true, p1: true, p2: true, p3: true });
+    thanniEligibleRef.current = { p0: true, p1: true, p2: true, p3: true };
+    setIsThanniRound(false); setThanniPartnerId(null);
     setTrump(null); setTrumpCard(null); setTrumpDown(true); setTrumpOpen(false);
     setShowPick(false); setTrumpRevealedBy(null);
     setTrickNum(0); setTurnPlayer(null); setPile([]); setResults([]);
@@ -624,6 +691,9 @@ export default function ThanniGame(): ReactNode {
     setCurBid(null); curBidRef.current = null;
     setBidWinner(null); setCurBidder(fb);
     setPasses(0); passesRef.current = 0; setBidLog([]); setBidActions({});
+    setThanniEligible({ p0: true, p1: true, p2: true, p3: true });
+    thanniEligibleRef.current = { p0: true, p1: true, p2: true, p3: true };
+    setIsThanniRound(false); setThanniPartnerId(null);
     setTrump(null); setTrumpCard(null); setTrumpDown(true); setTrumpOpen(false); setShowPick(false); setTrumpRevealedBy(null);
     setTrickNum(0); setTurnPlayer(null); setPile([]); setResults([]); setRoundMsg(null);
     voidCheckRef.current = false; setShowVoidModal(false); setVoidReason('');
@@ -656,14 +726,37 @@ export default function ThanniGame(): ReactNode {
 
   // ─── BIDDING ───
   const doBid = useCallback((pid: string, amt: number) => {
-    const b: Bid = { amount: amt, playerId: pid, displayName: getBidDisplayName(amt), timestamp: Date.now() };
+    const b: Bid = { amount: amt, kind: 'STANDARD', playerId: pid, displayName: getBidDisplayName(amt), timestamp: Date.now() };
     setCurBid(b); curBidRef.current = b;
     setPasses(0); passesRef.current = 0;
     setBidLog(prev => [...prev, `${pName(pid)} bids ${getBidDisplayName(amt)} (${amt})`]);
     setBidActions(prev => ({ ...prev, [pid]: `${getBidDisplayName(amt)} (${amt})` }));
+    // A numeric bid consumes this player's Thanni eligibility for the round.
+    setThanniEligible(prev => ({ ...prev, [pid]: false }));
+    thanniEligibleRef.current = { ...thanniEligibleRef.current, [pid]: false };
     setMsg(`${pName(pid)} bids ${getBidDisplayName(amt)}`);
     setCurBidder(getNextPlayerClockwise(pid));
   }, [pName]);
+
+  // Place a Thanni bid. Ends bidding immediately and jumps straight to THANNI_PLAYING.
+  const doThanniBid = useCallback((pid: string) => {
+    const b: Bid = { amount: THANNI_BID_AMOUNT, kind: 'THANNI', playerId: pid, displayName: 'Thanni', timestamp: Date.now() };
+    setCurBid(b); curBidRef.current = b;
+    setBidWinner(pid);
+    const partnerId = players.find(p => p.id === pid)?.partnerId ?? null;
+    setThanniPartnerId(partnerId);
+    setIsThanniRound(true);
+    setThanniEligible(prev => ({ ...prev, [pid]: false }));
+    thanniEligibleRef.current = { ...thanniEligibleRef.current, [pid]: false };
+    setBidLog(prev => [...prev, `${pName(pid)} bids Thanni — 4 tricks, no trump, partner folded!`]);
+    setBidActions(prev => ({ ...prev, [pid]: 'THANNI' }));
+    setMsg(`${pName(pid)} declares Thanni! Win all 4 tricks for +${THANNI_WIN_POINTS}, miss for -${THANNI_FAIL_PENALTY}.`);
+    // No phase-2 deal, no trump: jump straight to active play. Bidder leads.
+    setTrump(null); setTrumpCard(null); setTrumpDown(false); setTrumpOpen(false);
+    setShowPick(false); setTrumpRevealedBy(null);
+    setTrickNum(1); setTurnPlayer(pid); setPile([]); setResults([]);
+    setStatus('THANNI_PLAYING');
+  }, [pName, players]);
 
   const doPass = useCallback((pid: string) => {
     const np = passesRef.current + 1;
@@ -671,12 +764,15 @@ export default function ThanniGame(): ReactNode {
     setPasses(np);
     setBidLog(prev => [...prev, `${pName(pid)} passes`]);
     setBidActions(prev => ({ ...prev, [pid]: 'PASS' }));
+    // A pass consumes this player's Thanni eligibility for the round.
+    setThanniEligible(prev => ({ ...prev, [pid]: false }));
+    thanniEligibleRef.current = { ...thanniEligibleRef.current, [pid]: false };
     setMsg(`${pName(pid)} passes.`);
 
     const cb = curBidRef.current;
     if (!cb && np >= 4) {
       const fp = getNextPlayerClockwise(dealerId);
-      const fb: Bid = { amount: 150, playerId: fp, displayName: 'Beat', timestamp: Date.now() };
+      const fb: Bid = { amount: 150, kind: 'STANDARD', playerId: fp, displayName: 'Beat', timestamp: Date.now() };
       setCurBid(fb); curBidRef.current = fb;
       setBidWinner(fp); setStatus('BIDDING_PHASE2');
       setBidLog(prev => [...prev, `All passed! ${pName(fp)} forced Beat`]);
@@ -691,12 +787,17 @@ export default function ThanniGame(): ReactNode {
     setCurBidder(getNextPlayerClockwise(pid));
   }, [dealerId, pName]);
 
-  // AI bidding effect — scale 4-card hand eval to estimate 6-card strength
+  // AI bidding effect — consider Thanni first; otherwise scale 4-card hand eval to estimate 6-card strength
   useEffect(() => {
     if (status !== 'BIDDING_PHASE1' || curBidder === PID || bidWinner) return;
     const t = setTimeout(() => {
       const hand = gh(curBidder);
       const cb = curBidRef.current;
+      // Thanni: only on AI's first action this round AND only if not a guaranteed sweep (must carry real risk).
+      if (thanniEligibleRef.current[curBidder] && aiShouldBidThanni(hand) && !isGuaranteedSweep(hand)) {
+        doThanniBid(curBidder);
+        return;
+      }
       const eval4 = evaluateHand(hand);
       const projectedPoints = Math.round(eval4.adjustedScore * 1.5);
       const minA = cb ? cb.amount + 10 : 150;
@@ -708,7 +809,7 @@ export default function ThanniGame(): ReactNode {
       }
     }, 800 + Math.random() * 700);
     return () => clearTimeout(t);
-  }, [status, curBidder, curBid, bidWinner, gh, doBid, doPass]);
+  }, [status, curBidder, curBid, bidWinner, gh, doBid, doPass, doThanniBid]);
 
   // Bidding complete → trump selection (BEFORE dealing last 2 cards per PRD)
   useEffect(() => {
@@ -787,28 +888,48 @@ export default function ThanniGame(): ReactNode {
   // ─── SCORE ROUND ───
   const scoreRound = useCallback((res: TrickResult[]) => {
     if (!bidWinner || !curBid) return;
+    const cf = curBidRef.current;
+    if (!cf) return;
     let rp = 0, bp = 0;
+    const isThanni = cf.kind === 'THANNI';
+    let bidderTricksWon = 0;
     for (const t of res) {
       const tot = t.playedCards.reduce((s, x) => s + x.card.pointValue, 0);
       gp(t.winnerPlayerId).team === 'RED' ? (rp += tot) : (bp += tot);
+      if (t.winnerPlayerId === bidWinner) bidderTricksWon++;
     }
     const bt = gp(bidWinner).team;
     const btp = bt === 'RED' ? rp : bp;
-    const met = btp >= curBid.amount;
-    const hv = curBid.amount >= 200;
-    const mm = hv ? 2 : 1, fm = hv ? 4 : 2;
     let rc = 0, bc = 0;
-    if (met) {
-      if (bt === 'RED') rc = mm; else bc = mm;
+    let resultLabel: string;
+    if (isThanni) {
+      const targetTricks = isThanniRound ? 4 : 6;
+      const met = bidderTricksWon >= targetTricks;
+      if (met) {
+        if (bt === 'RED') rc = THANNI_WIN_POINTS; else bc = THANNI_WIN_POINTS;
+      } else {
+        // Opp +8 and bidding team −8 (floored at 0).
+        if (bt === 'RED') { rc = -THANNI_FAIL_PENALTY; bc = THANNI_FAIL_PENALTY; }
+        else { bc = -THANNI_FAIL_PENALTY; rc = THANNI_FAIL_PENALTY; }
+      }
+      resultLabel = `${bt} ${met ? 'made' : 'missed'} Thanni — bidder took ${bidderTricksWon}/${targetTricks} tricks.`;
     } else {
-      if (bt === 'RED') bc = fm; else rc = fm;
+      const met = btp >= cf.amount;
+      const hv = cf.amount >= 200;
+      const mm = hv ? 2 : 1, fm = hv ? 4 : 2;
+      if (met) {
+        if (bt === 'RED') rc = mm; else bc = mm;
+      } else {
+        if (bt === 'RED') bc = fm; else rc = fm;
+      }
+      resultLabel = `${bt} ${met ? 'made' : 'missed'} ${getBidDisplayName(cf.amount)}.`;
     }
     const nrp = Math.max(0, redS.points + rc), nbp = Math.max(0, blackS.points + bc);
     const nrf = redS.isFaceUp || rc > 0, nbf = blackS.isFaceUp || bc > 0;
     setRedS({ points: nrp, isFaceUp: nrf });
     setBlackS({ points: nbp, isFaceUp: nbf });
 
-    const rm = `${bt} ${met ? 'made' : 'missed'} ${getBidDisplayName(curBid.amount)}. Red ${rp}pts, Black ${bp}pts. Match: Red ${nrp}, Black ${nbp}.`;
+    const rm = `${resultLabel} Red ${rp}pts, Black ${bp}pts. Match: Red ${nrp}, Black ${nbp}.`;
     setRoundMsg(rm); setMsg(rm);
 
     if (nrp >= MATCH_GOAL) { setStatus('MATCH_OVER'); setMsg(`🔴 ${pName('p0')}/${pName('p2')} WIN! ${nrp}-${nbp}`); }
@@ -817,9 +938,11 @@ export default function ThanniGame(): ReactNode {
       setStatus('ROUND_SCORED');
       setDealerId(computeNextDealer(dealerId, nrp, nbp, players));
     }
-  }, [bidWinner, curBid, gp, redS, blackS, dealerId, players, pName]);
+  }, [bidWinner, curBid, isThanniRound, gp, redS, blackS, dealerId, players, pName]);
 
   // ─── PLAY A CARD ───
+  // Trick size: 4 normally, 3 in a Thanni round (partner folded).
+  // Round length: 6 tricks normally, 4 in a Thanni round (only phase-1 cards are played).
   const playCard = useCallback((pid: string, card: Card) => {
     setHand(pid, gh(pid).filter(c => c.id !== card.id));
     const pc: PlayedCard = { card, playerId: pid, trickNumber: trickNum, positionInTrick: pile.length + 1 };
@@ -827,9 +950,19 @@ export default function ThanniGame(): ReactNode {
     setPile(np);
     if (pid !== PID) setMsg(`${pName(pid)} plays ${card.value}${SUIT_SYMBOLS[card.suit]}`);
 
-    if (np.length === 4) {
+    // Use fresh closure values for trick size / count (avoid stale state inside setTimeout).
+    const sz = isThanniRound ? 3 : 4;
+    const totalTricks = isThanniRound ? 4 : 6;
+    const foldedPartner = isThanniRound ? thanniPartnerId : null;
+    const skipNext = (id: string): string => {
+      let n = getNextPlayerClockwise(id);
+      if (foldedPartner && n === foldedPartner) n = getNextPlayerClockwise(n);
+      return n;
+    };
+
+    if (np.length === sz) {
       setTimeout(() => {
-        const res = evaluateTrickWithContext(np, trumpOpen ? trump : null);
+        const res = evaluateTrickWithContext(np, (isThanniRound ? false : trumpOpen) ? trump : null);
         const tot = np.reduce((s, x) => s + x.card.pointValue, 0);
         addStats(res.winnerPlayerId, 1, tot);
         const nr = [...results, res];
@@ -837,7 +970,7 @@ export default function ThanniGame(): ReactNode {
         setMsg(`${pName(res.winnerPlayerId)} wins trick ${trickNum} (+${tot}pts)!`);
         setTimeout(() => {
           setPile([]);
-          if (trickNum < 6) {
+          if (trickNum < totalTricks) {
             setTrickNum(n => n + 1);
             setTurnPlayer(res.winnerPlayerId);
             setMsg(`Trick ${trickNum + 1}. ${pName(res.winnerPlayerId)} leads.`);
@@ -845,21 +978,22 @@ export default function ThanniGame(): ReactNode {
         }, 1500);
       }, 800);
     } else {
-      const next = getNextPlayerClockwise(pid);
+      const next = skipNext(pid);
       setTurnPlayer(next);
       if (next === PID) setMsg('Your turn — play a card.');
     }
-  }, [setHand, gh, trickNum, pile, trump, trumpOpen, results, addStats, scoreRound, pName]);
+  }, [setHand, gh, trickNum, pile, trump, trumpOpen, results, addStats, scoreRound, pName, isThanniRound, thanniPartnerId]);
 
   const userPlay = useCallback((card: Card) => {
-    if (turnPlayer !== PID || (status !== 'PLAYING' && status !== 'TRUMP_REVEALED')) return;
+    if (turnPlayer !== PID || (status !== 'PLAYING' && status !== 'TRUMP_REVEALED' && status !== 'THANNI_PLAYING')) return;
     const legal = legalFor(PID);
     if (!legal.some(c => c.id === card.id)) { setMsg('Cannot play that card — follow suit!'); return; }
     playCard(PID, card);
   }, [turnPlayer, status, legalFor, playCard]);
 
-  // AI trump-reveal effect
+  // AI trump-reveal effect — no-op during a Thanni round (no trump at all)
   useEffect(() => {
+    if (isThanniRound) return;
     if (status !== 'PLAYING' || trumpOpen || !trump || pile.length === 0) return;
     if (!turnPlayer || turnPlayer === PID) return;
     const hand = gh(turnPlayer);
@@ -868,25 +1002,31 @@ export default function ThanniGame(): ReactNode {
     if (canFollow) return;
     const t = setTimeout(() => doRevealTrump(turnPlayer), 500 + Math.random() * 400);
     return () => clearTimeout(t);
-  }, [status, turnPlayer, pile.length, trumpOpen, trump, gh, pile, doRevealTrump]);
+  }, [status, turnPlayer, pile.length, trumpOpen, trump, gh, pile, doRevealTrump, isThanniRound]);
 
-  // AI trick play
+  // AI trick play — also runs in THANNI_PLAYING. Skips the folded partner.
   useEffect(() => {
-    if (status !== 'PLAYING' && status !== 'TRUMP_REVEALED') return;
-    if (!turnPlayer || turnPlayer === PID || pile.length >= 4) return;
+    if (status !== 'PLAYING' && status !== 'TRUMP_REVEALED' && status !== 'THANNI_PLAYING') return;
+    if (!turnPlayer || turnPlayer === PID) return;
+    if (isThanniRound && turnPlayer === thanniPartnerId) return; // folded
+    const sz = isThanniRound ? 3 : 4;
+    if (pile.length >= sz) return;
     const t = setTimeout(() => {
       const hand = gh(turnPlayer);
       if (!hand.length) return;
       const legal = legalFor(turnPlayer);
       if (!legal.length) return;
       const me = gp(turnPlayer);
-      const pick = aiPickCard(legal, pile, turnPlayer, me.partnerId, trumpOpen, trump);
+      // In a Thanni round there is no trump and the partner is folded — opponents
+      // just play to win. aiPickCard with no trump handles this natively.
+      const pick = aiPickCard(legal, pile, turnPlayer, me.partnerId, isThanniRound ? false : trumpOpen, isThanniRound ? null : trump);
       playCard(turnPlayer, pick);
     }, 600 + Math.random() * 800);
     return () => clearTimeout(t);
-  }, [status, turnPlayer, pile.length, gh, legalFor, playCard, trump, trumpOpen, gp]);
+  }, [status, turnPlayer, pile.length, gh, legalFor, playCard, trump, trumpOpen, gp, isThanniRound, thanniPartnerId]);
 
-  const legalIds = (status === 'PLAYING' || status === 'TRUMP_REVEALED') && isMy
+  const isInteractiveStatus = status === 'PLAYING' || status === 'TRUMP_REVEALED' || status === 'THANNI_PLAYING';
+  const legalIds = isInteractiveStatus && isMy
     ? new Set(legalFor(PID).map(c => c.id)) : undefined;
 
   const handleVoidRedeal = useCallback(() => {
@@ -937,7 +1077,7 @@ export default function ThanniGame(): ReactNode {
         <div className="flex items-center justify-center gap-2 mt-1 text-xs sm:text-sm text-gray-300 flex-wrap">
           <span>Status: <strong className="text-yellow-300">{status}</strong></span>
           {trump && !trumpDown && <span className="text-red-400 font-bold">Trump: {SUIT_SYMBOLS[trump]}</span>}
-          <span>Trick: {trickNum}/6</span>
+          <span>Trick: {trickNum}/{isThanniRound ? 4 : 6}{isThanniRound ? ' · THANNI' : ''}</span>
           <span>Dealer: {pName(dealerId)}</span>
         </div>
       </div>
@@ -967,7 +1107,7 @@ export default function ThanniGame(): ReactNode {
             </div>
             <HandR cards={gh('p0')} label="" active={turnPlayer === 'p0'} fd />
             {status === 'BIDDING_PHASE1' && bidActions['p0'] && (
-              <span className={`text-xs font-bold mt-1 px-2 py-0.5 rounded ${bidActions['p0'] === 'PASS' ? 'bg-red-900/50 text-red-300' : 'bg-blue-900/50 text-blue-300'}`}>{bidActions['p0']}</span>
+              <span className={`text-xs font-bold mt-1 px-2 py-0.5 rounded ${bidBadgeClass(bidActions['p0'])}`}>{bidActions['p0']}</span>
             )}
             {(status === 'PLAYING' || status === 'TRUMP_REVEALED') && gp('p0').tricksWon > 0 && (
               <span className="text-xs text-gray-300 mt-1">🏆 {gp('p0').tricksWon} tricks · {gp('p0').pointsCaptured}pts</span>
@@ -982,7 +1122,7 @@ export default function ThanniGame(): ReactNode {
             <span className={`text-xs font-semibold mt-1 ${turnPlayer === 'p3' ? 'text-yellow-400 animate-pulse' : 'text-gray-400'}`}>{pName('p3')} — {gh('p3').length}</span>
             <HandR cards={gh('p3')} label="" active={turnPlayer === 'p3'} fd />
             {status === 'BIDDING_PHASE1' && bidActions['p3'] && (
-              <span className={`text-xs font-bold mt-1 px-2 py-0.5 rounded ${bidActions['p3'] === 'PASS' ? 'bg-red-900/50 text-red-300' : 'bg-blue-900/50 text-blue-300'}`}>{bidActions['p3']}</span>
+              <span className={`text-xs font-bold mt-1 px-2 py-0.5 rounded ${bidBadgeClass(bidActions['p3'])}`}>{bidActions['p3']}</span>
             )}
             {(status === 'PLAYING' || status === 'TRUMP_REVEALED') && gp('p3').tricksWon > 0 && (
               <span className="text-xs text-gray-300 mt-1">🏆 {gp('p3').tricksWon} · {gp('p3').pointsCaptured}pts</span>
@@ -992,18 +1132,27 @@ export default function ThanniGame(): ReactNode {
           {/* Center */}
           <div className="flex flex-col items-center justify-center flex-1 w-full max-w-sm sm:max-w-md">
             {/* Winning Bid info (during play + scoring) */}
-            {curBid && bidWinner && (status === 'PLAYING' || status === 'TRUMP_REVEALED' || status === 'ROUND_SCORED') && (() => {
+            {curBid && bidWinner && (status === 'PLAYING' || status === 'TRUMP_REVEALED' || status === 'THANNI_PLAYING' || status === 'ROUND_SCORED') && (() => {
               const bidTeam = gp(bidWinner).team;
               const partnerName = pName(gp(bidWinner).partnerId);
+              const isThanniBid = curBid.kind === 'THANNI';
               return (
-                <div className="mb-3 px-3 py-1.5 bg-gray-900/60 rounded-lg border border-yellow-500/40 text-center w-full max-w-xs">
-                  <div className="text-xs text-gray-400">Winning Bid</div>
-                  <div className={`text-sm font-bold ${bidTeam === 'RED' ? 'text-red-400' : 'text-gray-200'}`}>
-                    {getBidDisplayName(curBid.amount)} ({curBid.amount}) — {bidTeam === 'RED' ? '♥ RED' : '♠ BLACK'}
+                <div className={`mb-3 px-3 py-1.5 rounded-lg text-center w-full max-w-xs ${isThanniBid ? 'bg-purple-900/70 border border-purple-400/60' : 'bg-gray-900/60 border border-yellow-500/40'}`}>
+                  <div className="text-xs text-gray-400">{isThanniBid ? 'Thanni Bid' : 'Winning Bid'}</div>
+                  <div className={`text-sm font-bold ${isThanniBid ? 'text-purple-200' : bidTeam === 'RED' ? 'text-red-400' : 'text-gray-200'}`}>
+                    {isThanniBid
+                      ? `Thanni — ${bidTeam === 'RED' ? '♥ RED' : '♠ BLACK'} (No Trump)`
+                      : `${getBidDisplayName(curBid.amount)} (${curBid.amount}) — ${bidTeam === 'RED' ? '♥ RED' : '♠ BLACK'}`}
                   </div>
                   <div className="text-xs text-gray-400">
-                    by {pName(bidWinner)} & {partnerName}
+                    by {pName(bidWinner)} {isThanniBid ? `(solo)` : `& ${partnerName}`}
                   </div>
+                  {isThanniBid && (
+                    <div className="text-[10px] sm:text-xs text-purple-300 mt-1">
+                      Win all 4 tricks: <span className="text-green-300">+{THANNI_WIN_POINTS}</span> · Miss: <span className="text-red-300">−{THANNI_FAIL_PENALTY} (opp +{THANNI_FAIL_PENALTY})</span>
+                      <br /> {partnerName} folded — solo 1 vs 2
+                    </div>
+                  )}
                 </div>
               );
             })()}
@@ -1057,6 +1206,9 @@ export default function ThanniGame(): ReactNode {
             {/* Bidding / Trump Pick */}
             {status === 'BIDDING_PHASE1' && (
               <BidPanel cur={curBid} my={curBidder === PID} est={myHand.length > 0 ? evaluateHand(myHand).estimatedPoints : 0}
+                thanniEligible={!!thanniEligible[PID]}
+                thanniBlocked={thanniSweepGuaranteedForMe}
+                onThanni={() => { if (curBidder === PID) doThanniBid(PID); }}
                 onBid={(a) => { if (curBidder === PID) doBid(PID, a); }}
                 onPass={() => { if (curBidder === PID) doPass(PID); }} />
             )}
@@ -1073,7 +1225,7 @@ export default function ThanniGame(): ReactNode {
             <span className={`text-xs font-semibold mt-1 ${turnPlayer === 'p1' ? 'text-yellow-400 animate-pulse' : 'text-gray-400'}`}>{pName('p1')} — {gh('p1').length}</span>
             <HandR cards={gh('p1')} label="" active={turnPlayer === 'p1'} fd />
             {status === 'BIDDING_PHASE1' && bidActions['p1'] && (
-              <span className={`text-xs font-bold mt-1 px-2 py-0.5 rounded ${bidActions['p1'] === 'PASS' ? 'bg-red-900/50 text-red-300' : 'bg-blue-900/50 text-blue-300'}`}>{bidActions['p1']}</span>
+              <span className={`text-xs font-bold mt-1 px-2 py-0.5 rounded ${bidBadgeClass(bidActions['p1'])}`}>{bidActions['p1']}</span>
             )}
             {(status === 'PLAYING' || status === 'TRUMP_REVEALED') && gp('p1').tricksWon > 0 && (
               <span className="text-xs text-gray-300 mt-1">🏆 {gp('p1').tricksWon} · {gp('p1').pointsCaptured}pts</span>
@@ -1095,7 +1247,7 @@ export default function ThanniGame(): ReactNode {
             onClick={showPick ? (c: Card) => pickTrump(c) : userPlay}
             isMine active={isMy || showPick} />
           {status === 'BIDDING_PHASE1' && bidActions[PID] && (
-            <span className={`text-xs font-bold px-2 py-0.5 rounded ${bidActions[PID] === 'PASS' ? 'bg-red-900/50 text-red-300' : 'bg-blue-900/50 text-blue-300'}`}>{bidActions[PID]}</span>
+            <span className={`text-xs font-bold px-2 py-0.5 rounded ${bidBadgeClass(bidActions[PID])}`}>{bidActions[PID]}</span>
           )}
           {(status === 'PLAYING' || status === 'TRUMP_REVEALED') && gp(PID).tricksWon > 0 && (
             <span className="text-xs text-gray-300">🏆 {gp(PID).tricksWon} tricks · {gp(PID).pointsCaptured}pts</span>

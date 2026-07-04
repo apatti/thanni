@@ -79,6 +79,16 @@ export const MAX_BID = 328;
 /** Cards dealt to each player in phase 2. */
 const CARDS_DEALT_PHASE2 = 2;
 
+// ---- Thanni bid ----
+/** Sentinel amount for a Thanni bid (it is not ranked against numeric 150–328 bids). */
+export const THANNI_BID_AMOUNT = 0;
+/** Match points won by the bidding team when a Thanni bid succeeds. */
+export const THANNI_WIN_POINTS = 4;
+/** Match points lost by the bidding team (and gained by opposition) when Thanni fails. */
+export const THANNI_FAIL_PENALTY = 8;
+/** Cards each player holds during the bidding phase (phase-1 deal). */
+export const PHASE1_HAND_SIZE = 4;
+
 // ---- Player & IDs ----
 
 export type PlayerId = string; // e.g., "p0", "p1"
@@ -100,13 +110,17 @@ export interface Card {
   id: string; // e.g., "AH", "KS", "QD", "JC", "10H", "9S"
 }
 
+/** Bid kind discriminator. STANDARD = numeric 150–328 bid; THANNI = the special all-tricks bid. */
+export type BidKind = 'STANDARD' | 'THANNI';
+
 /**
  * The player who won the bid and chooses trump.
  */
 export interface Bid {
   amount: number;
+  kind: BidKind;
   playerId: PlayerId;
-  displayName: string; // e.g., "Beat", "John", "70"
+  displayName: string; // e.g., "Beat", "John", "Thanni"
   timestamp: number;
 }
 
@@ -131,6 +145,14 @@ export interface BiddingState {
   allPlayersHavePassed: boolean;
   forcedBidTriggered: boolean;
   bids: Map<PlayerId, Bid>;
+  /**
+   * Thanni eligibility per player. `true` at the start of a round; flips to
+   * `false` the moment that player passes OR places any numeric bid. Thanni
+   * is only biddable on a player's first bid action of the round.
+   */
+  thanniEligible: Record<PlayerId, boolean>;
+  /** `true` once a Thanni bid has ended bidding this round. */
+  endedByThanni: boolean;
 }
 
 /**
@@ -156,6 +178,7 @@ export type GameStatus =
   | 'TRUMP_SET'
   | 'PLAYING'
   | 'TRUMP_REVEALED'
+  | 'THANNI_PLAYING'
   | 'ROUND_SCORED'
   | 'MATCH_OVER';
 
@@ -180,6 +203,13 @@ export interface GameState {
   
   /** ID of player who won the bid (null until bid completes). */
   bidWinnerId: PlayerId | null;
+
+  /** True when the current round is a Thanni round (no phase-2 deal, no trump, partner folded). */
+  isThanniRound: boolean;
+  /** Bidder who declared Thanni this round (null outside a Thanni round). */
+  thanniBidderId: PlayerId | null;
+  /** Folded partner of the Thanni bidder (null outside a Thanni round). */
+  thanniPartnerId: PlayerId | null;
 
   /** Trump suit for the current round (null = hidden/not yet chosen). */
   trumpSuit: Suit | null;
@@ -244,7 +274,8 @@ export interface Player {
 /**
  * Get display name for a bid amount per PRD Appendix C / Section 3.9.
  */
-export function getBidDisplayName(amount: number): string {
+export function getBidDisplayName(amount: number, kind: BidKind = 'STANDARD'): string {
+  if (kind === 'THANNI') return 'Thanni';
   if (amount === 150) return 'Beat';
   if (amount === 200) return 'John';
   if (amount === 210) return 'John 10';
@@ -557,6 +588,7 @@ export function placeBid(
   // Create the bid
   const newBid: Bid = {
     amount: bidAmount,
+    kind: 'STANDARD',
     playerId,
     displayName: getBidDisplayName(bidAmount),
     timestamp: Date.now(),
@@ -575,6 +607,9 @@ export function placeBid(
   // Reset passes since last bid (this player made a bid, not a pass)
   const passesSinceLastBid = 0;
 
+  // A numeric bid consumes the player's Thanni eligibility for the round.
+  const thanniEligible = { ...state.thanniEligible, [playerId]: false };
+
   return {
     newState: {
       ...state,
@@ -582,6 +617,73 @@ export function placeBid(
       passesSinceLastBid,
       currentPlayerToBid: nextPlayer,
       bids: newBids,
+      thanniEligible,
+    },
+    error: null,
+  };
+}
+
+/**
+ * Validate a Thanni bid. A player may bid Thanni iff:
+ *  - it is their turn to bid,
+ *  - they are still Thanni-eligible (have neither passed nor placed a prior numeric bid this round),
+ *  - their 4-card phase-1 hand does NOT guarantee a sweep against every possible opponent deal
+ *    (i.e., the bid carries genuine risk — at least 1% by random sampling).
+ */
+export function isValidThanniBid(
+  state: BiddingState,
+  playerId: PlayerId,
+  bidderHand: Card[],
+): { ok: true } | { ok: false; error: string } {
+  if (playerId !== state.currentPlayerToBid) {
+    return { ok: false, error: 'Not your turn to bid' };
+  }
+  if (!state.thanniEligible[playerId]) {
+    return { ok: false, error: 'Thanni only available on your first bid action this round' };
+  }
+  if (bidderHand.length !== PHASE1_HAND_SIZE) {
+    return { ok: false, error: `Thanni can only be bid during phase-1 (expected ${PHASE1_HAND_SIZE} cards)` };
+  }
+  if (isGuaranteedSweep(bidderHand)) {
+    return { ok: false, error: 'Hand is a guaranteed sweep — Thanni requires at least 1% risk' };
+  }
+  return { ok: true };
+}
+
+/**
+ * Place a Thanni bid. Ends bidding immediately; the caller must then transition
+ * straight to the playing phase (THANNI_PLAYING) skipping trump selection and phase-2 deal.
+ */
+export function placeThanniBid(
+  state: BiddingState,
+  playerId: PlayerId,
+  bidderHand: Card[],
+): { newState: BiddingState; error: null } | { newState: null; error: string } {
+  const v = isValidThanniBid(state, playerId, bidderHand);
+  if (!v.ok) return { newState: null, error: v.error };
+
+  const newBid: Bid = {
+    amount: THANNI_BID_AMOUNT,
+    kind: 'THANNI',
+    playerId,
+    displayName: 'Thanni',
+    timestamp: Date.now(),
+  };
+
+  const newBids = new Map(state.bids);
+  newBids.set(playerId, newBid);
+
+  const thanniEligible = { ...state.thanniEligible, [playerId]: false };
+
+  return {
+    newState: {
+      ...state,
+      currentHighestBid: newBid,
+      passesSinceLastBid: 0,
+      currentPlayerToBid: playerId,
+      bids: newBids,
+      thanniEligible,
+      endedByThanni: true,
     },
     error: null,
   };
@@ -606,7 +708,10 @@ export function passBid(
   const nextPlayer = playerIds[nextIndex];
 
   const passesSinceLastBid = state.passesSinceLastBid + 1;
-  
+
+  // A pass consumes the player's Thanni eligibility for the round.
+  const thanniEligible = { ...state.thanniEligible, [playerId]: false };
+
   // Check if all 4 players have passed (only possible if no current highest bid)
   let forcedBidTriggered = false;
   if (!state.currentHighestBid && passesSinceLastBid >= 4) {
@@ -618,6 +723,7 @@ export function passBid(
       ...state,
       passesSinceLastBid,
       currentPlayerToBid: nextPlayer,
+      thanniEligible,
     },
     forcedBidTriggered,
   };
@@ -630,6 +736,7 @@ export function passBid(
 export function forceBeatBid(state: BiddingState): BiddingState {
   const beatBid: Bid = {
     amount: MIN_BEAT,
+    kind: 'STANDARD',
     playerId: state.currentPlayerToBid,
     displayName: 'Beat',
     timestamp: Date.now(),
@@ -648,6 +755,162 @@ export function forceBeatBid(state: BiddingState): BiddingState {
 }
 
 // (aiDecideBidOrPass moved to ./thanniAI.ts)
+
+// ============================================================================
+// SECTION 5B: THANNI SWEEP PRE-CHECK — Information-set aware risk analysis
+// ============================================================================
+//
+// At bid time the bidder sees only their own 4 phase-1 cards. The other 20
+// cards in the deck are unseen — 12 of them have been dealt to the 3 other
+// players (4 each) and 8 are still in the dealing deck. Since the partner
+// is folded once a Thanni bid is accepted, only the two opponents' 8 cards
+// actually play. The bidder's risk lives in the uncertainty about which 12
+// of the 20 unseen cards were dealt (and within those 12, which 8 went to
+// the two opponents rather than to the folded partner).
+//
+// `isGuaranteedSweep(bidderHand)` returns `true` iff, against every possible
+// opponent deal, the bidder has a perfect-information minimax strategy to win
+// all 4 tricks (no-trump, bidder leads every trick). Enumerating all
+// C(20,8) × C(8,4) ≈ 8.8M partitions is infeasible, so we:
+//   (a) probe random partitions — early-exit on the first partition where
+//       the bidder cannot sweep (that proves real risk → not guaranteed), and
+//   (b) if all sampled partitions sweep, return `true` (treat as guaranteed).
+// Sampling at 250 partitions detects any non-trivial losing probability
+// (well above the 1% risk threshold the rules require to allow Thanni).
+//
+// The bidder leads every trick (they must win all 4, so the trick winner is
+// always the bidder in a sweeping line). This lets us prune the minimax the
+// moment an opponent would win a trick — that line fails for the bidder.
+
+const SWEEP_SAMPLE_LIMIT = 250;
+
+/** Cards the opponents can hold: any 8 of the 20 unseen cards, split 4/4. */
+function enumerateOppPartition(unseen: Card[], rng: () => number): { oppA: Card[]; oppB: Card[] } {
+  // Partial Fisher–Yates: pick the first 8 of a shuffled copy of `unseen`.
+  const arr = unseen.slice();
+  for (let i = 0; i < 8; i++) {
+    const j = i + Math.floor(rng() * (arr.length - i));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return { oppA: arr.slice(0, 4), oppB: arr.slice(4, 8) };
+}
+
+/** Cards legal to play given the hand and the led suit (must follow if able). */
+function legalFollow(hand: Card[], ledSuit: Suit | null): Card[] {
+  if (ledSuit === null) return hand.slice();
+  if (hand.some(c => c.suit === ledSuit)) return hand.filter(c => c.suit === ledSuit);
+  return hand.slice();
+}
+
+/** Winner of a 3-card trick (no trump). Returns the player index (0=bidder,1=oppA,2=oppB) of the winner. */
+function trickWinner3(players: [Card, number][], ledSuit: Suit): number {
+  let best = players[0];
+  for (const p of players) {
+    if (p[0].suit === ledSuit && (best[0].suit !== ledSuit || p[0].pointValue > best[0].pointValue)) {
+      best = p;
+    }
+  }
+  return best[1];
+}
+
+/**
+ * Perfect-information minimax for a single opponent deal. Bidder leads every
+ * trick. Returns `true` if the bidder can win all 4 tricks against optimal
+ * opponent defense (each opponent picks the response minimax-favorable to them).
+ */
+function bidderCanSweepDeal(
+  bidder: Card[],
+  oppA: Card[],
+  oppB: Card[],
+  trickNum: number,
+  memo: Map<string, boolean>,
+): boolean {
+  if (trickNum > 4) return true; // bidder won all 4 tricks on this line
+
+  // Memo key: quick structural hash of remaining hands + trickNum. Without
+  // memoization the search revisits the same (bidder, oppA, oppB) state many
+  // times across sibling branches and runs too long.
+  const key = `${trickNum}|${bidder.map(c => c.id).sort().join(',')}|${oppA.map(c => c.id).sort().join(',')}|${oppB.map(c => c.id).sort().join(',')}`;
+  const cached = memo.get(key);
+  if (cached !== undefined) return cached;
+
+  // Bidder (maximizer) picks the lead card.
+  let result = false;
+  for (const leadCard of bidder) {
+    const newBidder = bidder.filter(c => c.id !== leadCard.id);
+
+    // oppA (minimizer) picks any legal response.
+    const aLegal = legalFollow(oppA, leadCard.suit);
+
+    // For this lead to succeed, EVERY (oppA, oppB) response pair must let
+    // the bidder win the trick AND a recursive sweep must succeed.
+    let leadSucceeds = true;
+    for (const aCard of aLegal) {
+      const newOppA = oppA.filter(c => c.id !== aCard.id);
+      const bLegal = legalFollow(oppB, leadCard.suit);
+      for (const bCard of bLegal) {
+        const newOppB = oppB.filter(c => c.id !== bCard.id);
+        const pile: [Card, number][] = [[leadCard, 0], [aCard, 1], [bCard, 2]];
+        const winner = trickWinner3(pile, leadCard.suit);
+        if (winner !== 0) {
+          // Opponent wins this trick → bidder loses the round on this line.
+          leadSucceeds = false;
+          break;
+        }
+        if (!bidderCanSweepDeal(newBidder, newOppA, newOppB, trickNum + 1, memo)) {
+          leadSucceeds = false;
+          break;
+        }
+      }
+      if (!leadSucceeds) break;
+    }
+    if (leadSucceeds) { result = true; break; } // found a lead that survives all opp responses
+  }
+  memo.set(key, result);
+  return result;
+}
+
+/**
+ * Returns `true` if the bidder's 4-card hand guarantees a sweep against every
+ * possible opponent deal (i.e., no real risk → Thanni must be DISALLOWED).
+ * Returns `false` if at least one sampled opponent deal lets the opponents
+ * force a trick win against the bidder (real risk → Thanni allowed).
+ */
+export function isGuaranteedSweep(bidderHand: Card[]): boolean {
+  if (bidderHand.length !== PHASE1_HAND_SIZE) return false;
+
+  // Fast path: holding all 4 Jacks (or any card that's the absolute highest
+  // of its suit in each of the 4 suits the bidder holds) is a trivial sweep
+  // — opponents can never beat a J lead since J is the highest card.
+  const allJacks = bidderHand.every(c => c.value === 'J') && new Set(bidderHand.map(c => c.suit)).size === 4;
+  if (allJacks) return true;
+
+  // Build the unseen card pool = full deck minus bidder's cards.
+  const seenIds = new Set(bidderHand.map(c => c.id));
+  const unseen = buildDeck().filter(c => !seenIds.has(c.id));
+
+  let rng = mulberry32(0x5eed ^ bidderHand.reduce((h, c) => h ^ c.pointValue, 0));
+  for (let i = 0; i < SWEEP_SAMPLE_LIMIT; i++) {
+    const { oppA, oppB } = enumerateOppPartition(unseen, rng);
+    const memo = new Map<string, boolean>();
+    if (!bidderCanSweepDeal(bidderHand.slice(), oppA, oppB, 1, memo)) {
+      return false; // a possible deal where bidder can lose → real risk → not guaranteed
+    }
+  }
+  return true; // sampled many deals, bidder swept them all → treat as guaranteed
+}
+
+/** Small deterministic PRNG (so the sweep check is reproducible per hand). */
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a |= 0; a = (a + 0x6d2b79f5) | 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
 
 // ============================================================================
 // SECTION 6: TRICK EVALUATOR — Determine trick winner
@@ -726,10 +989,13 @@ export function getLegalCards(
 /**
  * Determine the winning card in a trick (no trump context — led suit only).
  * Use evaluateTrickWithContext() when trump suit is known.
+ *
+ * Supports both 4-player tricks (standard round) and 3-player tricks
+ * (Thanni round — partner folded).
  */
 export function determineTrickWinner(trickPile: PlayedCard[]): TrickResult {
-  if (trickPile.length !== 4) {
-    throw new Error(`Expected 4 cards in trick, got ${trickPile.length}`);
+  if (trickPile.length !== 3 && trickPile.length !== 4) {
+    throw new Error(`Expected 3 or 4 cards in trick, got ${trickPile.length}`);
   }
 
   // Without trump context, highest card of the led suit wins
@@ -738,13 +1004,16 @@ export function determineTrickWinner(trickPile: PlayedCard[]): TrickResult {
 
 /**
  * Trump-aware trick evaluation. Called with full game context.
+ *
+ * Supports both 4-player tricks (standard round) and 3-player tricks
+ * (Thanni round — partner folded).
  */
 export function evaluateTrickWithContext(
   trickPile: PlayedCard[],
   trumpSuit: Suit | null,
 ): TrickResult {
-  if (trickPile.length !== 4) {
-    throw new Error(`Expected 4 cards in trick, got ${trickPile.length}`);
+  if (trickPile.length !== 3 && trickPile.length !== 4) {
+    throw new Error(`Expected 3 or 4 cards in trick, got ${trickPile.length}`);
   }
 
   const ledSuit = getLedSuit(trickPile);
@@ -848,13 +1117,96 @@ export function calculateTeamPoints(
 }
 
 /**
+ * Compute a RoundScoringResult given the bidding team, success flag, and
+ * the met/failed multipliers. Shared by the standard bid path and the
+ * Thanni path (the Thanni path also subtracts `failedBiddingPenalty`
+ * match points from the bidding team on failure).
+ */
+function computeRoundScoringResult(
+  gameState: GameState,
+  biddingTeam: Team,
+  bidAmount: number,
+  metBid: boolean,
+  metMultiplier: number,
+  failedOppositionMultiplier: number,
+  failedBiddingPenalty: number,
+  swingOnFail: boolean,
+): RoundScoringResult {
+  const redTeam = gameState.redTeamScore;
+  const blackTeam = gameState.blackTeamScore;
+
+  let redMatchPointsChange = 0;
+  let blackMatchPointsChange = 0;
+  let redPendingChange = 0;
+  let blackPendingChange = 0;
+
+  if (metBid) {
+    const biddingTeamScore = biddingTeam === 'RED' ? redTeam : blackTeam;
+    const oppositionScore = biddingTeam === 'RED' ? blackTeam : redTeam;
+    if (biddingTeamScore.isFaceUp) {
+      if (biddingTeam === 'RED') redMatchPointsChange = metMultiplier;
+      else blackMatchPointsChange = metMultiplier;
+    } else {
+      if (oppositionScore.isFaceUp) {
+        if (biddingTeam === 'RED') blackPendingChange = -metMultiplier;
+        else redPendingChange = -metMultiplier;
+      }
+    }
+  } else {
+    const oppositionScore = biddingTeam === 'RED' ? blackTeam : redTeam;
+    if (oppositionScore.isFaceUp) {
+      if (biddingTeam === 'RED') blackMatchPointsChange = failedOppositionMultiplier;
+      else redMatchPointsChange = failedOppositionMultiplier;
+    } else {
+      if (biddingTeam === 'RED') blackPendingChange = failedOppositionMultiplier;
+      else redPendingChange = failedOppositionMultiplier;
+    }
+    if (swingOnFail && failedBiddingPenalty > 0) {
+      // Subtract failedBiddingPenalty from the bidding team's active match points (floored at 0).
+      if (biddingTeam === 'RED') redMatchPointsChange -= failedBiddingPenalty;
+      else blackMatchPointsChange -= failedBiddingPenalty;
+    }
+  }
+
+  // Apply changes to scores
+  const newRedScore: TeamScore = {
+    ...redTeam,
+    points: Math.max(0, redTeam.points + redMatchPointsChange),
+    pendingPoints: redTeam.pendingPoints + redPendingChange,
+  };
+  const newBlackScore: TeamScore = {
+    ...blackTeam,
+    points: Math.max(0, blackTeam.points + blackMatchPointsChange),
+    pendingPoints: blackTeam.pendingPoints + blackPendingChange,
+  };
+
+  let matchOver = false;
+  let winner: Team | null = null;
+  if (newRedScore.points >= MATCH_GOAL) { matchOver = true; winner = 'RED'; }
+  else if (newBlackScore.points >= MATCH_GOAL) { matchOver = true; winner = 'BLACK'; }
+
+  return {
+    biddingTeam,
+    biddingTeamActualPoints: 0,
+    biddingTeamBid: bidAmount,
+    metBid,
+    redTeamMatchPointsChange: redMatchPointsChange,
+    blackTeamMatchPointsChange: blackMatchPointsChange,
+    redTeamPendingPointsChange: redPendingChange,
+    blackTeamPendingPointsChange: blackPendingChange,
+    matchOver,
+    winner,
+  };
+}
+
+/**
  * Apply round scoring per PRD Section 2.4 / Section 4.
- * 
+ *
  * HIGH-VALUE BONUS RULE (BID >= 200):
  *   Met + face-up: +2 match points to bidding team
  *   Met + face-down: reduce opposition's face-up score by -2
  *   Failed: opposition gets +4 match points
- * 
+ *
  * STANDARD BIDS (BID < 200):
  *   Met + face-up: +1 match point to bidding team
  *   Met + face-down: reduce opposition's face-up score by -1
@@ -865,12 +1217,32 @@ export function applyRoundScoring(
   biddingTeam: Team,
   biddingTeamActualPoints: number, // Total points the bidding team captured across all tricks
 ): RoundScoringResult {
-  const bidAmount = gameState.biddingState.currentHighestBid!.amount;
+  const bid = gameState.biddingState.currentHighestBid!;
+  const isThanni = bid.kind === 'THANNI';
+  const bidAmount = bid.amount;
+
+  // Thanni scoring: bidder must win ALL 4 tricks. ±4 met; bidding team −8 AND opp +8 on fail.
+  if (isThanni) {
+    const bidderId = gameState.thanniBidderId ?? bid.playerId;
+    const bidder = gameState.players.get(bidderId);
+    const bidderWonAll4 = bidder != null && bidder.tricksWonThisRound === 4;
+    return computeRoundScoringResult(
+      gameState,
+      biddingTeam,
+      bidAmount,
+      bidderWonAll4,
+      THANNI_WIN_POINTS,
+      THANNI_FAIL_PENALTY, // gained by opposition
+      THANNI_FAIL_PENALTY, // also subtracted from bidding team
+      true, // thanni always swings both ways
+    );
+  }
+
   const metBid = biddingTeamActualPoints >= bidAmount;
-  
+
   const redTeam = gameState.redTeamScore;
   const blackTeam = gameState.blackTeamScore;
-  
+
   let redMatchPointsChange = 0;
   let blackMatchPointsChange = 0;
   let redPendingChange = 0;
@@ -1062,8 +1434,13 @@ export function createInitialState(
       allPlayersHavePassed: false,
       forcedBidTriggered: false,
       bids: new Map(),
+      thanniEligible: { p0: true, p1: true, p2: true, p3: true },
+      endedByThanni: false,
     },
     bidWinnerId: null,
+    isThanniRound: false,
+    thanniBidderId: null,
+    thanniPartnerId: null,
     trumpSuit: null,
     trumpFaceDown: true,
     trumpRevealedThisRound: false,
@@ -1197,6 +1574,34 @@ export function transitionToPlaying(gameState: GameState): GameState {
 }
 
 /**
+ * Transition: BIDDING_PHASE1 → THANNI_PLAYING.
+ * Called immediately after a Thanni bid. Skips phase-2 deal and trump
+ * selection entirely. The Thanni bidder leads trick 1; the partner is
+ * folded (does not play). No trump suit is set.
+ */
+export function transitionToThanniPlaying(gameState: GameState): GameState {
+  const bidderId = gameState.biddingState.currentHighestBid!.playerId;
+  const bidder = gameState.players.get(bidderId)!;
+  const partnerId = bidder.partnerId;
+
+  return {
+    ...gameState,
+    status: 'THANNI_PLAYING',
+    bidWinnerId: bidderId,
+    isThanniRound: true,
+    thanniBidderId: bidderId,
+    thanniPartnerId: partnerId,
+    trumpSuit: null,
+    trumpFaceDown: false,
+    trumpRevealedThisRound: false,
+    currentTrickNumber: 1,
+    currentLeadPlayerId: bidderId, // Thanni bidder leads
+    trickPile: [],
+    lastSavedAt: Date.now(),
+  };
+}
+
+/**
  * Transition: PLAYING → ROUND_SCORED (after 6 tricks)
  * Evaluate scores, apply match-point updates.
  */
@@ -1254,8 +1659,13 @@ export function transitionToNewRound(gameState: GameState): GameState {
       allPlayersHavePassed: false,
       forcedBidTriggered: false,
       bids: new Map(),
+      thanniEligible: { p0: true, p1: true, p2: true, p3: true },
+      endedByThanni: false,
     },
     bidWinnerId: null,
+    isThanniRound: false,
+    thanniBidderId: null,
+    thanniPartnerId: null,
     trumpSuit: null,
     trumpFaceDown: true,
     trumpRevealedThisRound: false,
@@ -1720,6 +2130,7 @@ export {
   evaluateHand,
   calculateBidFromEstimate,
   aiDecideBidOrPass,
+  aiShouldBidThanni,
   winningOfPile,
   aiPickCard,
   computeNextDealer,

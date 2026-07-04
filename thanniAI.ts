@@ -123,6 +123,43 @@ export function aiDecideBidOrPass(
   return { action: 'PASS' };
 }
 
+/**
+ * Heuristic: should an AI player bid Thanni on its first action? Thanni
+ * requires winning all 4 tricks with no trump and a folded partner — a high-
+ * risk, high-reward bid. The AI bids Thanni only when its 4-card hand is
+ * strong in absolute terms (top-end cards across distinct suits) AND the
+ * starting position is favorable (it's a real gamble, not a desperate move).
+ *
+ * The caller must additionally verify via `isGuaranteedSweep(hand)` that the
+ * bid carries genuine risk (a guaranteed-sweep hand is disallowed by the rules).
+ */
+export function aiShouldBidThanni(hand: Card[]): boolean {
+  if (hand.length !== 4) return false;
+
+  // Count top cards: J (highest) and 9 (second-highest by point value) are the
+  // most sweep-relevant cards, since they win tricks outright in a no-trump round.
+  let jCount = 0;
+  let nineCount = 0;
+  let aCount = 0;
+  const suits = new Set<Suit>();
+  for (const c of hand) {
+    suits.add(c.suit);
+    if (c.value === 'J') jCount++;
+    else if (c.value === '9') nineCount++;
+    else if (c.value === 'A') aCount++;
+  }
+
+  // Strong Thanni candidate: at least 2 Jacks across distinct suits, ideally
+  // backed by an A or 9. This is aggressive but matches the spirit of "I think
+  // I can take every trick if I lead well" — and the sweep pre-check filters
+  // out the true guaranteed-sweep cases (those are disallowed, not strategic).
+  if (jCount >= 2 && suits.size >= 2 && (nineCount >= 1 || aCount >= 1)) return true;
+  // Three Jacks in any distribution is a strong enough start to gamble.
+  if (jCount >= 3) return true;
+
+  return false;
+}
+
 // ============================================================================
 // SECTION 2: GAMEPLAY AI — Trick-winning card selection
 // ============================================================================
