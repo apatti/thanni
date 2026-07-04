@@ -47,6 +47,13 @@ const mkPlayer = (id: string, name: string, team: Team, partnerId: string, isHum
 const PID = 'p2';
 const BOT_NAMES: Record<string, string> = { p0: 'Arjun', p1: 'Vikram', p3: 'Priya' };
 
+// Debug helpers — format cards / hands for the debug log panel.
+const fmtCard = (c: Card): string => `${c.value}${SUIT_SYMBOLS[c.suit]}`;
+const fmtHand = (cs: Card[]): string => cs.length ? cs.map(fmtCard).join(' ') : '∅';
+const fmtPile = (pile: PlayedCard[]): string => pile.length
+  ? pile.map(pc => `${pc.playerId}:${fmtCard(pc.card)}`).join(' ')
+  : '∅';
+
 // ─── Player Avatar ───────────────────────────────────────────────────
 function PlayerAvatar({ name, team, active = false }: { name: string; team: Team; active?: boolean }): ReactNode {
   const initials = name === 'You' ? 'YOU' : name.slice(0, 2).toUpperCase();
@@ -584,6 +591,21 @@ const blackPts = Math.max(0, -balance);
   const [showVoidModal, setShowVoidModal] = useState(false);
   const [voidReason, setVoidReason] = useState<string>('');
 
+  // Debug mode: reveals all hands + logs every AI decision (bids, card picks,
+  // trick outcomes, scoring) so the engine/AI can be inspected live.
+  const [debugMode, setDebugMode] = useState(false);
+  const [debugLog, setDebugLog] = useState<string[]>([]);
+  const debugModeRef = useRef(false);
+  const setDebug = useCallback((on: boolean) => {
+    debugModeRef.current = on;
+    setDebugMode(on);
+  }, []);
+  const dbg = useCallback((line: string) => {
+    if (!debugModeRef.current) return;
+    const ts = new Date().toLocaleTimeString('en-US', { hour12: false }) + '.' + String(Date.now() % 1000).padStart(3, '0');
+    setDebugLog(prev => [...prev, `[${ts}] ${line}`]);
+  }, []);
+
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const deckRef = useRef<Card[]>([]);
   const passesRef = useRef(0);
@@ -736,6 +758,7 @@ const blackPts = Math.max(0, -balance);
     setShowPick(false); setTrumpRevealedBy(null);
     setTrickNum(0); setTurnPlayer(null); setPile([]); setResults([]);
     setRoundMsg(null); setShowVoidModal(false); setVoidReason(''); voidCheckRef.current = false;
+    setDebugLog([]);
     setMsg('Welcome back! Start a new match.');
   }, [clr]);
 
@@ -763,8 +786,10 @@ const blackPts = Math.max(0, -balance);
     setTrump(null); setTrumpCard(null); setTrumpDown(true); setTrumpOpen(false); setShowPick(false); setTrumpRevealedBy(null);
     setTrickNum(0); setTurnPlayer(null); setPile([]); setResults([]); setRoundMsg(null);
     voidCheckRef.current = false; setShowVoidModal(false); setVoidReason('');
+    setDebugLog([]);
     setMsg(`Cards dealt (4 each). ${pName(fb)} bids first.`);
-  }, [clr, dealerId, pName, getInitPlayers]);
+    dbg(`─── NEW HAND · dealer=${pName(dId)} · firstBidder=${pName(fb)} ───`);
+  }, [clr, dealerId, pName, getInitPlayers, dbg]);
 
   // ─── DEAL PHASE 2 ───
   const deal2 = useCallback(() => {
@@ -801,8 +826,9 @@ const blackPts = Math.max(0, -balance);
     setThanniEligible(prev => ({ ...prev, [pid]: false }));
     thanniEligibleRef.current = { ...thanniEligibleRef.current, [pid]: false };
     setMsg(`${pName(pid)} bids ${getBidDisplayName(amt)}`);
+    dbg(`BID ${pName(pid)} → ${getBidDisplayName(amt)} (${amt}) · hand=${fmtHand(gh(pid))}`);
     setCurBidder(getNextPlayerClockwise(pid));
-  }, [pName]);
+  }, [pName, dbg, gh]);
 
   // Place a Thanni bid. Ends bidding immediately and jumps straight to THANNI_PLAYING.
   const doThanniBid = useCallback((pid: string) => {
@@ -817,6 +843,7 @@ const blackPts = Math.max(0, -balance);
     setBidLog(prev => [...prev, `${pName(pid)} bids Thanni — 4 tricks, no trump, partner folded!`]);
     setBidActions(prev => ({ ...prev, [pid]: 'THANNI' }));
     setMsg(`${pName(pid)} declares Thanni! Win all 4 tricks for +${THANNI_WIN_POINTS}, miss for -${THANNI_FAIL_PENALTY}.`);
+    dbg(`THANNI ${pName(pid)} → solo bid · hand=${fmtHand(gh(pid))} · partner=${pName(players.find(p => p.id === pid)?.partnerId ?? '?')} folded`);
     // No phase-2 deal, no trump: jump straight to active play. Bidder leads.
     setTrump(null); setTrumpCard(null); setTrumpDown(false); setTrumpOpen(false);
     setShowPick(false); setTrumpRevealedBy(null);
@@ -834,6 +861,7 @@ const blackPts = Math.max(0, -balance);
     setThanniEligible(prev => ({ ...prev, [pid]: false }));
     thanniEligibleRef.current = { ...thanniEligibleRef.current, [pid]: false };
     setMsg(`${pName(pid)} passes.`);
+    dbg(`PASS ${pName(pid)} · hand=${fmtHand(gh(pid))}`);
 
     const cb = curBidRef.current;
     if (!cb && np >= 4) {
@@ -851,7 +879,7 @@ const blackPts = Math.max(0, -balance);
       return;
     }
     setCurBidder(getNextPlayerClockwise(pid));
-  }, [dealerId, pName]);
+  }, [dealerId, pName, dbg, gh]);
 
   // AI bidding effect — consider Thanni first; otherwise route the numeric-bid
   // decision through the per-seat AI strategy (or the legacy inline heuristic).
@@ -874,6 +902,7 @@ const blackPts = Math.max(0, -balance);
         const eval4 = evaluateHand(hand);
         const projectedPoints = Math.round(eval4.adjustedScore * 1.5);
         const minA = cb ? cb.amount + 10 : 150;
+        dbg(`AI-BID ${pName(curBidder)} [legacy] · estPts=${eval4.estimatedPoints} adj=${eval4.adjustedScore} proj=${projectedPoints} minNext=${minA} curBid=${cb ? cb.amount : '—'} · hand=${fmtHand(hand)}`);
         if (projectedPoints >= minA && minA <= 328) {
           const bidAmt = Math.max(minA, Math.ceil(projectedPoints / 10) * 10);
           bidAmt <= 328 ? doBid(curBidder, Math.min(bidAmt, 328)) : doPass(curBidder);
@@ -882,6 +911,7 @@ const blackPts = Math.max(0, -balance);
         }
       } else {
         const choice = getAIStrategy(curBidder).chooseBid(buildBiddingView(curBidder));
+        dbg(`AI-BID ${pName(curBidder)} [${seatMode}] → ${choice.kind}${choice.kind === 'BID' ? ` ${choice.amount}` : ''} · hand=${fmtHand(hand)}`);
         if (choice.kind === 'BID' && choice.amount > 0) {
           doBid(curBidder, Math.min(choice.amount, MAX_BID));
         } else {
@@ -890,7 +920,7 @@ const blackPts = Math.max(0, -balance);
       }
     }, 800 + Math.random() * 700);
     return () => clearTimeout(t);
-  }, [status, curBidder, curBid, bidWinner, gh, doBid, doPass, doThanniBid, buildBiddingView]);
+  }, [status, curBidder, curBid, bidWinner, gh, doBid, doPass, doThanniBid, buildBiddingView, dbg, pName]);
 
   // Bidding complete → trump selection (BEFORE dealing last 2 cards per PRD)
   useEffect(() => {
@@ -911,12 +941,13 @@ const blackPts = Math.max(0, -balance);
           setTrumpCard(chosenCard);
           setTrump(bestSuit); setTrumpDown(true); setStatus('TRUMP_SET');
           setMsg(`${pName(bidWinner)} set trump. Face down!`);
+          dbg(`TRUMP-SET ${pName(bidWinner)} → ${SUIT_SYMBOLS[bestSuit as Suit]} (card ${fmtCard(chosenCard)} set aside) · suitCounts=${JSON.stringify(sc)} · hand=${fmtHand(bh)}`);
           return cur.map(p => p.id === bidWinner ? { ...p, hand: p.hand.filter(c => c.id !== chosenCard.id) } : p);
         });
       }, 1000);
       return () => clearTimeout(t1);
     }
-  }, [status, bidWinner, showPick, pName]);
+  }, [status, bidWinner, showPick, pName, dbg]);
 
   // TRUMP_SET → deal remaining 2 cards → open the Hath Band eligibility gate.
   // The status stays at TRUMP_SET until EITHER someone calls Hath Band OR the
@@ -958,7 +989,8 @@ const blackPts = Math.max(0, -balance);
     const ld = getNextPlayerClockwise(dealerId);
     setTrickNum(1); setTurnPlayer(ld);
     setMsg(`Trick 1. ${pName(ld)} leads.`);
-  }, [dealerId, pName]);
+    dbg(`HATH-BAND-GATE dismissed — no call. Lead=${pName(ld)} · normal play starts`);
+  }, [dealerId, pName, dbg]);
 
   // Call Hath Band: any player may invoke this. Partner folded; trump discarded
   // (its physical card returns to the bid winner's hand); caller leads trick 1;
@@ -986,7 +1018,8 @@ const blackPts = Math.max(0, -balance);
     setStatus('HATH_BAND_PLAYING');
     setMsg(`${pName(pid)} calls Hath Band! Win all 6 tricks solo for +${HATH_BAND_WIN_POINTS} or miss for a swing of ${HATH_BAND_FAIL_PENALTY}.`);
     setBidLog(prev => [...prev, `${pName(pid)} calls Hath Band! Solo 6-trick run, no trump, partner folded.`]);
-  }, [players, trumpCard, bidWinner, pName]);
+    dbg(`HATH-BAND ${pName(pid)} → solo call · hand=${fmtHand(gh(pid))} · partner=${pName(players.find(p => p.id === pid)?.partnerId ?? '?')} folded · trump discarded`);
+  }, [players, trumpCard, bidWinner, pName, dbg, gh]);
 
   // Live hands map for the Hath Band sweep check (memoized by card contents).
   const liveHandsMap = useMemo(() => {
@@ -1005,14 +1038,17 @@ const blackPts = Math.max(0, -balance);
       for (const cand of ['p0', 'p1', 'p3']) { // AIs only; PID = human
         const hand = gh(cand);
         if (hand.length !== 6) continue;
-        if (aiShouldCallHathBand(hand) && !isHathBandGuaranteedSweep(cand, liveHandsMap)) {
+        const should = aiShouldCallHathBand(hand);
+        const sweepGuaranteed = isHathBandGuaranteedSweep(cand, liveHandsMap);
+        dbg(`HATH-BAND-CHECK ${pName(cand)} · heuristic=${should} sweepGuaranteed=${sweepGuaranteed} · hand=${fmtHand(hand)}`);
+        if (should && !sweepGuaranteed) {
           doHathBandCall(cand);
           return;
         }
       }
     }, 1200);
     return () => clearTimeout(t);
-  }, [hathBandEligible, isHathBandRound, isThanniRound, gh, liveHandsMap, doHathBandCall]);
+  }, [hathBandEligible, isHathBandRound, isThanniRound, gh, liveHandsMap, doHathBandCall, dbg, pName]);
 
   // Auto-dismiss the gate after ~5s of inactivity so the round proceeds naturally
   // even if no one calls Hath Band and the human doesn't click "Start Play".
@@ -1026,7 +1062,8 @@ const blackPts = Math.max(0, -balance);
     setTrump(card.suit); setTrumpCard(card); setTrumpDown(true); setShowPick(false); setStatus('TRUMP_SET');
     setPlayers(prev => prev.map(p => p.id === PID ? { ...p, hand: p.hand.filter(c => c.id !== card.id) } : p));
     setMsg(`Trump set to ${SUIT_SYMBOLS[card.suit]}. Card placed face-down!`);
-  }, []);
+    dbg(`TRUMP-SET ${pName(PID)} → ${SUIT_SYMBOLS[card.suit]} (card ${fmtCard(card)} set aside)`);
+  }, [dbg, pName]);
 
   // Internal: perform a trump reveal and return the trump card to the bid winner.
   const doRevealTrump = useCallback((revealingPlayerId: string) => {
@@ -1039,7 +1076,8 @@ const blackPts = Math.max(0, -balance);
         : p));
     }
     setMsg(`Trump revealed: ${SUIT_SYMBOLS[trump]}! ${trumpCard ? trumpCard.value + SUIT_SYMBOLS[trump] + ' returns to hand. ' : ''}Must play trump if able.`);
-  }, [trump, trumpOpen, trumpCard, bidWinner]);
+    dbg(`TRUMP-REVEAL by ${pName(revealingPlayerId)} → ${SUIT_SYMBOLS[trump]}${trumpCard ? ` (${fmtCard(trumpCard)} back to ${pName(bidWinner ?? '?')})` : ''} · pile=${fmtPile(pile)}`);
+  }, [trump, trumpOpen, trumpCard, bidWinner, dbg, pName, pile]);
 
   const revealTrump = useCallback(() => {
     if (!trump || trumpOpen) return;
@@ -1122,6 +1160,7 @@ const blackPts = Math.max(0, -balance);
 
     const rm = `${resultLabel} Red ${rp}pts, Black ${bp}pts. Match: Red ${nrp}, Black ${nbp}.`;
     setRoundMsg(rm); setMsg(rm);
+    dbg(`SCORE · ${resultLabel} gain=${gainTeam}+${gainAmount} · balance=${balance}→${newBalance} (RED ${nrp} · BLACK ${nbp})${soloCallerTeam ? ` · soloCaller=${soloCallerTeam} made=${soloMade}` : ''}`);
 
     if (newBalance >= MATCH_GOAL) { setStatus('MATCH_OVER'); setMsg(`🔴 ${pName('p0')}/${pName('p2')} WIN! ${nrp}-${nbp}`); }
     else if (newBalance <= -MATCH_GOAL) { setStatus('MATCH_OVER'); setMsg(`⚫ ${pName('p1')}/${pName('p3')} WIN! ${nbp}-${nrp}`); }
@@ -1160,6 +1199,7 @@ const blackPts = Math.max(0, -balance);
     };
 
     if (np.length === sz) {
+      if (pid === PID) dbg(`PLAY ${pName(pid)} → ${fmtCard(card)} · pile-before=${fmtPile(pile)} → resolves`);
       setTimeout(() => {
         // Solo rounds have no trump; standard rounds honor the reveal state.
         const res = evaluateTrickWithContext(np, (isSoloRound ? false : trumpOpen) ? trump : null);
@@ -1168,10 +1208,12 @@ const blackPts = Math.max(0, -balance);
         const nr = [...results, res];
         setResults(nr);
         setMsg(`${pName(res.winnerPlayerId)} wins trick ${trickNum} (+${tot}pts)!`);
+        dbg(`TRICK-WIN #${trickNum} → ${pName(res.winnerPlayerId)} (+${tot}pts) · pile=${fmtPile(np)}`);
         // Solo early-termination: the caller must win every trick. If they lose
         // even one, the round ends immediately — skip the "next trick" continuation
         // and jump straight to scoring with the partial trick history.
         const callerLostTrick = isSoloRound && soloCallerId !== null && res.winnerPlayerId !== soloCallerId;
+        if (callerLostTrick) dbg(`SOLO-END ${pName(soloCallerId!)} lost trick ${trickNum} — round ends early (caller took ${nr.filter(r => r.winnerPlayerId === soloCallerId).length} tricks)`);
         setTimeout(() => {
           setPile([]);
           if (!callerLostTrick && trickNum < totalTricks) {
@@ -1184,11 +1226,12 @@ const blackPts = Math.max(0, -balance);
         }, 1500);
       }, 800);
     } else {
+      if (pid === PID) dbg(`PLAY ${pName(pid)} → ${fmtCard(card)} · pile-before=${fmtPile(pile)}`);
       const next = skipNext(pid);
       setTurnPlayer(next);
       if (next === PID) setMsg('Your turn — play a card.');
     }
-  }, [setHand, gh, trickNum, pile, trump, trumpOpen, results, addStats, scoreRound, pName, isSoloRound, soloTargetTricks, foldedPartnerId, soloCallerId]);
+  }, [setHand, gh, trickNum, pile, trump, trumpOpen, results, addStats, scoreRound, pName, isSoloRound, soloTargetTricks, foldedPartnerId, soloCallerId, dbg]);
 
   const userPlay = useCallback((card: Card) => {
     if (turnPlayer !== PID || (status !== 'PLAYING' && status !== 'TRUMP_REVEALED' && status !== 'THANNI_PLAYING' && status !== 'HATH_BAND_PLAYING')) return;
@@ -1231,13 +1274,15 @@ const blackPts = Math.max(0, -balance);
       if (seatMode === 'legacy') {
         const me = gp(turnPlayer);
         pick = aiPickCard(legal, pile, turnPlayer, me.partnerId, isSoloRound ? false : trumpOpen, isSoloRound ? null : trump);
+        dbg(`AI-PLAY ${pName(turnPlayer)} [legacy] trick=${trickNum} pos=${pile.length + 1} → ${fmtCard(pick)} · legal=[${fmtHand(legal)}] · pile=${fmtPile(pile)} trumpOpen=${trumpOpen} trump=${trump ? SUIT_SYMBOLS[trump] : '—'}`);
       } else {
         pick = getAIStrategy(turnPlayer).chooseCard(buildCardplayView(turnPlayer));
+        dbg(`AI-PLAY ${pName(turnPlayer)} [${seatMode}] trick=${trickNum} pos=${pile.length + 1} → ${fmtCard(pick)} · legal=[${fmtHand(legal)}] · pile=${fmtPile(pile)}`);
       }
       playCard(turnPlayer, pick);
     }, 600 + Math.random() * 800);
     return () => clearTimeout(t);
-  }, [status, turnPlayer, pile.length, gh, legalFor, playCard, trump, trumpOpen, gp, isSoloRound, foldedPartnerId, buildCardplayView]);
+  }, [status, turnPlayer, pile.length, gh, legalFor, playCard, trump, trumpOpen, gp, isSoloRound, foldedPartnerId, buildCardplayView, dbg, pName, trickNum]);
 
   const isInteractiveStatus = status === 'PLAYING' || status === 'TRUMP_REVEALED' || status === 'THANNI_PLAYING' || status === 'HATH_BAND_PLAYING';
   const legalIds = isInteractiveStatus && isMy
@@ -1285,8 +1330,14 @@ const blackPts = Math.max(0, -balance);
       <div className="w-full max-w-4xl mx-auto mb-2">
         <div className="flex items-center justify-between">
           <h1 className="text-xl sm:text-2xl font-bold text-yellow-400 drop-shadow-lg">THANNI</h1>
-          <div className="flex items-center">
+          <div className="flex items-center gap-3">
             <AIModeDropdown onChange={() => setAiModeVersion(v => v + 1)} />
+            <button
+              onClick={() => setDebug(!debugMode)}
+              title="Toggle debug mode: reveal all hands + log every AI decision"
+              className={`text-xs sm:text-sm font-bold px-2 py-1 rounded-lg border transition-all ${debugMode ? 'bg-orange-600 border-orange-400 text-white' : 'bg-gray-800 border-gray-600 text-orange-300 hover:bg-gray-700'}`}>
+              🐛 Debug: {debugMode ? 'ON' : 'OFF'}
+            </button>
             <button onClick={() => setShowRules(true)}
               className="text-xs sm:text-sm text-blue-300 hover:text-blue-200 underline">Rules</button>
           </div>
@@ -1320,6 +1371,37 @@ const blackPts = Math.max(0, -balance);
         </div>
       )}
 
+      {/* Debug panel — revealed when debug mode is on. Shows every AI decision
+          (bids, card picks with legal options, trick outcomes, scoring) plus
+          all hands at the top of each hand. */}
+      {debugMode && (
+        <div className="w-full max-w-3xl mx-auto mt-2 p-2 bg-gray-950/80 rounded-lg border border-orange-500/40 shadow-lg flex flex-col">
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-xs font-bold text-orange-300 tracking-wider">🐛 DEBUG LOG ({debugLog.length})</span>
+            <div className="flex gap-2">
+              <button onClick={() => navigator.clipboard?.writeText(debugLog.join('\n'))}
+                className="text-[10px] text-gray-300 hover:text-white border border-gray-600 rounded px-2 py-0.5">Copy</button>
+              <button onClick={() => setDebugLog([])}
+                className="text-[10px] text-gray-300 hover:text-white border border-gray-600 rounded px-2 py-0.5">Clear</button>
+            </div>
+          </div>
+          <div className="max-h-48 overflow-y-auto font-mono text-[11px] leading-tight">
+            {debugLog.length === 0
+              ? <div className="text-gray-500 italic px-1 py-2">No events yet — start a hand.</div>
+              : debugLog.map((l, i) => {
+                  const tone = l.startsWith('───')
+                    ? 'text-orange-300 font-bold'
+                    : l.startsWith('AI-') ? 'text-cyan-300'
+                    : l.startsWith('TRICK') ? 'text-green-300'
+                    : l.startsWith('SCORE') ? 'text-yellow-300'
+                    : l.startsWith('THANNI') || l.startsWith('HATH') ? 'text-purple-300'
+                    : 'text-gray-300';
+                  return <div key={i} className={`px-1 ${tone}`}>{l}</div>;
+                })}
+          </div>
+        </div>
+      )}
+
       {/* GAME TABLE */}
       <div className="w-full max-w-4xl flex flex-col items-center justify-center flex-1 relative mt-2">
         {/* Top (p0 = Partner) */}
@@ -1329,7 +1411,7 @@ const blackPts = Math.max(0, -balance);
               <PlayerAvatar name={pName('p0')} team={gp('p0').team} active={turnPlayer === 'p0'} />
               <span className={`text-xs font-semibold ${turnPlayer === 'p0' ? 'text-yellow-400 animate-pulse' : 'text-gray-400'}`}>{pName('p0')} — {gh('p0').length} cards</span>
             </div>
-            <HandR cards={gh('p0')} label="" active={turnPlayer === 'p0'} fd />
+            <HandR cards={gh('p0')} label="" active={turnPlayer === 'p0'} fd={!debugMode} />
             {status === 'BIDDING_PHASE1' && bidActions['p0'] && (
               <span className={`text-xs font-bold mt-1 px-2 py-0.5 rounded ${bidBadgeClass(bidActions['p0'])}`}>{bidActions['p0']}</span>
             )}
@@ -1344,7 +1426,7 @@ const blackPts = Math.max(0, -balance);
           <div className="flex-shrink-0 flex flex-col items-center">
             <PlayerAvatar name={pName('p3')} team={gp('p3').team} active={turnPlayer === 'p3'} />
             <span className={`text-xs font-semibold mt-1 ${turnPlayer === 'p3' ? 'text-yellow-400 animate-pulse' : 'text-gray-400'}`}>{pName('p3')} — {gh('p3').length}</span>
-            <HandR cards={gh('p3')} label="" active={turnPlayer === 'p3'} fd />
+            <HandR cards={gh('p3')} label="" active={turnPlayer === 'p3'} fd={!debugMode} />
             {status === 'BIDDING_PHASE1' && bidActions['p3'] && (
               <span className={`text-xs font-bold mt-1 px-2 py-0.5 rounded ${bidBadgeClass(bidActions['p3'])}`}>{bidActions['p3']}</span>
             )}
@@ -1495,7 +1577,7 @@ const blackPts = Math.max(0, -balance);
           <div className="flex-shrink-0 flex flex-col items-center">
             <PlayerAvatar name={pName('p1')} team={gp('p1').team} active={turnPlayer === 'p1'} />
             <span className={`text-xs font-semibold mt-1 ${turnPlayer === 'p1' ? 'text-yellow-400 animate-pulse' : 'text-gray-400'}`}>{pName('p1')} — {gh('p1').length}</span>
-            <HandR cards={gh('p1')} label="" active={turnPlayer === 'p1'} fd />
+            <HandR cards={gh('p1')} label="" active={turnPlayer === 'p1'} fd={!debugMode} />
             {status === 'BIDDING_PHASE1' && bidActions['p1'] && (
               <span className={`text-xs font-bold mt-1 px-2 py-0.5 rounded ${bidBadgeClass(bidActions['p1'])}`}>{bidActions['p1']}</span>
             )}
