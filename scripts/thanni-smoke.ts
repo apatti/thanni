@@ -30,7 +30,7 @@ import {
   type PlayedCard,
   type PlayerId,
 } from '../thanniEngine';
-import { HeuristicAI, getAIStrategy, getAISeatMode, setAISeatMode, resetAIMode, isDefaultMode, DEFAULT_MODE, type CardplayView, type BiddingView } from '../src/ai';
+import { HeuristicAI, getAIStrategy, getAISeatMode, setAISeatMode, resetAIMode, isDefaultMode, DEFAULT_MODE, type CardplayView, type BiddingView, GaAI, DEFAULT_GENOME } from '../src/ai';
 
 type Case = { name: string; fn: () => void };
 const cases: Case[] = [];
@@ -732,9 +732,9 @@ cases.push({
   },
 });
 
-// Case 32: getAIStrategy returns a strategy for each seat.
+// Case 32: getAIStrategy returns the right strategy per seat-mode.
 cases.push({
-  name: 'getAIStrategy returns HeuristicAI for legacy / heuristic / mcts / ga',
+  name: 'getAIStrategy returns HeuristicAI for legacy/heuristic/mcts, GaAI for ga',
   fn: () => {
     resetAIMode();
     assertEq('isDefaultMode', isDefaultMode(), true);
@@ -748,7 +748,7 @@ cases.push({
     assertEq('mcts placeholder name', mcts.name, 'HeuristicAI');
     setAISeatMode('p0', 'ga');
     const ga = getAIStrategy('p0');
-    assertEq('ga placeholder name', ga.name, 'HeuristicAI');
+    assertEq('ga impl name', ga.name, 'GaAI'); // Now wired up via registry + genome JSON
     resetAIMode();
   },
 });
@@ -821,6 +821,38 @@ cases.push({
     const p1Hand = state.players.get('p1')!.hand;
     const next = simulateAction(state, { kind: 'PLAY', playerId: 'p1', card: p1Hand[0] });
     assertEq('returned state identity (illegal)', next === state, true);
+  },
+});
+
+// Case 37: GaAI(DEFAULT_GENOME) reproduces HeuristicAI's bidding decisions byte-for-byte.
+// Critical sanity check — the default genome is the starting point for offline training.
+cases.push({
+  name: 'GaAI(DEFAULT_GENOME) byte-identical to HeuristicAI on bidding for sample hands',
+  fn: () => {
+    const deck = buildDeck();
+    const ga = new GaAI(DEFAULT_GENOME);
+    const heur = new HeuristicAI();
+    const sampleHands = [
+      ['JH', 'JD', 'JS', 'JC'],
+      ['QH', 'QD', 'QS', 'QC'],
+      ['JH', '9H', 'AH', '10H'],
+      ['KH', 'KD', 'KS', '9C'],
+      ['JH', '9D', 'AS', '10C'],
+    ];
+    for (const ids of sampleHands) {
+      const hand = ids.map(id => deck.find(c => c.id === id)!).filter(Boolean);
+      if (hand.length !== 4) continue;
+      // Test as opening bid (no current bid).
+      const view: BiddingView = {
+        myId: 'p0', myHand: hand, currentHighestBid: null, minNextBid: 150,
+        passesSinceLastBid: 0, thanniEligible: true, balance: 0,
+      };
+      const gaChoice = ga.chooseBid(view);
+      const heurChoice = heur.chooseBid(view);
+      const gaStr = gaChoice.kind === 'PASS' ? 'PASS' : `BID ${gaChoice.amount}`;
+      const heurStr = heurChoice.kind === 'PASS' ? 'PASS' : `BID ${heurChoice.amount}`;
+      assertEq(`hand [${ids.join(',')}] opening bid`, gaStr, heurStr);
+    }
   },
 });
 

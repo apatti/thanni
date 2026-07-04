@@ -1,0 +1,12 @@
+{
+  "concentrationBonus4": 15,
+  "concentrationBonus3": 8,
+  "highCardBonus4": 10,
+  "highCardBonus3": 5,
+  "projectionFactor": 1.5,
+  "confidenceThreshold": 1.0,
+  "leadHighest": 1.0,
+  "partnerWinningDumpCheapest": 1.0,
+  "oppWinningBeatPolicy": 1.0,
+  "oppWinningDumpPolicy": 1.0
+}

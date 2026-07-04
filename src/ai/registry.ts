@@ -14,13 +14,23 @@
 
 import type { AIStrategy } from './AIStrategy';
 import { HeuristicAI } from './HeuristicAI';
+import { GaAI } from './GaAI';
 import { getAISeatMode, type AIStrategyName } from './featureFlag';
+import type { Genome } from './genome';
+import genomeJson from './ga-genome.json';
+
+// 'ga' loads the trained artifact from src/ai/ga-genome.json. By default that
+// file contains DEFAULT_GENOME (so GaAI === HeuristicAI byte-for-byte); after
+// running `npx tsx scripts/ga-train.ts`, the trainer overwrites the file with
+// the evolved genome and the next build picks it up.
+const trainedGenome: Genome = genomeJson as Genome;
+const gaStrategy = new GaAI(trainedGenome);
 
 const impls: Record<AIStrategyName, AIStrategy> = {
   legacy: new HeuristicAI(),
   heuristic: new HeuristicAI(),
   mcts: new HeuristicAI(), // placeholder until MctsAI is written
-  ga: new HeuristicAI(),   // placeholder until GaAI is written
+  ga: gaStrategy,
 };
 
 export function getAIStrategy(seatId: string): AIStrategy {
