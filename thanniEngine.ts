@@ -76,13 +76,8 @@ export const MIN_BEAT = 150;
 /** Maximum possible bid (total points in play). */
 export const MAX_BID = 328;
 
-/** Cards per suit in a Thanni deck. */
-const CARDS_PER_SUIT = 6;
-
-/** Cards dealt per player per phase. */
-const CARDS_DEALT_PHASE1 = 4;
+/** Cards dealt to each player in phase 2. */
 const CARDS_DEALT_PHASE2 = 2;
-const HAND_SIZE = CARDS_DEALT_PHASE1 + CARDS_DEALT_PHASE2; // 6
 
 // ---- Player & IDs ----
 
@@ -212,6 +207,9 @@ export interface GameState {
 
   /** Match goal. Default 12. */
   matchGoal: number;
+
+  /** Winning team once match is over; null until status === 'MATCH_OVER'. */
+  winner: Team | null;
 
   /** Remaining undealt cards. */
   remainingDeck: Card[];
@@ -426,9 +424,7 @@ export function dealPhase1(deck: Card[], dealerId: PlayerId): Map<PlayerId, Card
   const sortedDeck = [...deck]; // Already shuffled
 
   // Determine starting player (left of dealer, clockwise)
-  const playerIds = Array.from({ length: 4 }, (_, i) => `p${i}`);
   const dealerIndex = parseInt(dealerId.replace('p', ''));
-  let currentPlayerIndex = (dealerIndex + 1) % 4;
 
   for (let cardIdx = 0; cardIdx < 24; cardIdx += 4) {
     for (let localIdx = 0; localIdx < 4; localIdx++) {
@@ -490,7 +486,6 @@ export function dealPhase2(
 ): { updatedHands: Map<PlayerId, Card[]>; newRemainingDeck: Card[] } {
   const updatedHands = new Map(hands);
   const cardsToDeal = [...remainingDeck]; // Take from top of deck
-  const newRemainingDeck: Card[] = [];
 
   for (const [playerId, hand] of updatedHands) {
     const phase2Cards = cardsToDeal.splice(0, CARDS_DEALT_PHASE2);
@@ -633,8 +628,6 @@ export function passBid(
  * Per PRD Section 6.3: Player 0 (first to speak) is forced to bid 150.
  */
 export function forceBeatBid(state: BiddingState): BiddingState {
-  const playerIds = ['p0', 'p1', 'p2', 'p3'];
-  
   const beatBid: Bid = {
     amount: MIN_BEAT,
     playerId: state.currentPlayerToBid,
@@ -891,7 +884,6 @@ export function applyRoundScoring(
   if (metBid) {
     // BIDDING TEAM MEETS OR EXCEEDS BID
     const biddingTeamScore = biddingTeam === 'RED' ? redTeam : blackTeam;
-    const oppositionTeam = biddingTeam === 'RED' ? blackTeam : redTeam;
     const oppositionScore = biddingTeam === 'RED' ? blackTeam : redTeam;
 
     if (biddingTeamScore.isFaceUp) {
@@ -914,8 +906,6 @@ export function applyRoundScoring(
     }
   } else {
     // BIDDING TEAM FAILS TO MEET BID
-    const biddingTeamScore = biddingTeam === 'RED' ? redTeam : blackTeam;
-    const oppositionTeam = biddingTeam === 'RED' ? blackTeam : redTeam;
     const oppositionScore = biddingTeam === 'RED' ? blackTeam : redTeam;
 
     if (oppositionScore.isFaceUp) {
@@ -982,7 +972,7 @@ export function applyRoundScoring(
  */
 export function determineNextDealer(
   gameState: GameState,
-  trickResults: TrickResult[],
+  _trickResults: TrickResult[],
 ): PlayerId {
   const redTeam = gameState.redTeamScore;
   const blackTeam = gameState.blackTeamScore;
@@ -1005,7 +995,7 @@ export function determineNextDealer(
  * Get the next player in a team's seating order for dealing.
  */
 function getNextDealerInTeam(
-  playerIds: string[],
+  _playerIds: string[],
   _team: TeamScore & { isFaceUp: boolean },
   currentDealerId: PlayerId,
 ): PlayerId {
@@ -1099,6 +1089,7 @@ export function createInitialState(
       })),
     },
     matchGoal,
+    winner: null,
     remainingDeck: [],
     stateHash: 'initial_placeholder_hash',
   };
@@ -1227,6 +1218,7 @@ export function transitionToMatchOver(
   return {
     ...gameState,
     status: 'MATCH_OVER',
+    winner,
     lastSavedAt: Date.now(),
   };
 }
@@ -1450,13 +1442,6 @@ export function evaluateRound(
   // In a real implementation, you'd track points per trick. For now, use a placeholder.
   let redPoints = 0;
   let blackPoints = 0;
-  
-  // The trick pile contains all remaining cards; distribute based on tricks won
-  // This is a simplified calculation; actual engine tracks points per trick.
-  const biddingTeamPlayerIds = [
-    bidWinnerId,
-    gameState.players.get(bidWinnerId)!.partnerId,
-  ];
 
   // Sum points from each player's captured points this round
   for (const [, player] of gameState.players) {

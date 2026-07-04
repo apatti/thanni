@@ -285,6 +285,44 @@ function RulesModal({ onClose }: { onClose: () => void }): ReactNode {
   );
 }
 
+// ─── Match Over Modal ──────────────────────────────────────────────────
+function MatchOverModal({ winner, redPoints, blackPoints, pName, onNewMatch }: {
+  winner: Team; redPoints: number; blackPoints: number;
+  pName: (id: string) => string; onNewMatch: () => void;
+}): ReactNode {
+  const isRedWin = winner === 'RED';
+  const winPartner1 = isRedWin ? pName('p0') : pName('p1');
+  const winPartner2 = isRedWin ? pName('p2') : pName('p3');
+  const winColor = isRedWin ? 'text-red-400' : 'text-gray-100';
+  const ringColor = isRedWin
+    ? 'border-red-500/60 from-red-900/40 to-gray-900/70'
+    : 'border-gray-400/60 from-gray-800/60 to-gray-900/70';
+  const scoreHighlight = isRedWin ? redPoints : blackPoints;
+  const losingScore = isRedWin ? blackPoints : redPoints;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+      <div className={`bg-gradient-to-br ${ringColor} rounded-2xl shadow-2xl border-2 max-w-md w-full p-6 text-center`}>
+        <div className="text-5xl mb-3 animate-bounce">🏆</div>
+        <h2 className={`text-2xl sm:text-3xl font-black mb-1 ${winColor}`}>MATCH OVER</h2>
+        <div className={`text-xl sm:text-2xl font-bold mb-4 ${winColor}`}>
+          {isRedWin ? '♥ RED WINS' : '♠ BLACK WINS'}
+        </div>
+        <div className="text-sm text-gray-300 mb-2">
+          {winPartner1} &amp; {winPartner2}
+        </div>
+        <div className="text-3xl font-black text-white mb-1">
+          {scoreHighlight} — {losingScore}
+        </div>
+        <div className="text-xs text-gray-400 mb-5">final match points</div>
+        <button onClick={onNewMatch}
+          className="px-6 py-3 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold rounded-lg shadow-lg transition-all active:scale-95">
+          New Match
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ─── Lobby Screen ─────────────────────────────────────────────────────
 function LobbyScreen({ onStart, onShowRules, playerName, setPlayerName }: {
   onStart: () => void; onShowRules: () => void;
@@ -1211,6 +1249,20 @@ export default function ThanniGame(): ReactNode {
 
       {/* In-game Rules Modal (also reachable from header) */}
       {showRules && <RulesModal onClose={() => setShowRules(false)} />}
+
+      {/* Match Over Modal */}
+      {status === 'MATCH_OVER' && (() => {
+        const winner: Team = redS.points >= blackS.points ? 'RED' : 'BLACK';
+        return (
+          <MatchOverModal
+            winner={winner}
+            redPoints={redS.points}
+            blackPoints={blackS.points}
+            pName={pName}
+            onNewMatch={handleNewMatch}
+          />
+        );
+      })()}
     </div>
   );
 }
