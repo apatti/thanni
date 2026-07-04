@@ -606,6 +606,9 @@ const blackPts = Math.max(0, -balance);
   const [msg, setMsg] = useState('Welcome to Thanni!');
   const [roundMsg, setRoundMsg] = useState<string | null>(null);
   const [showTricksModal, setShowTricksModal] = useState(false);
+  // Auto-opens on ROUND_SCORED (non-solo). Holds two actions: Review Tricks / Next Hand.
+  // Cleared by deal() / handleNewMatch() so a fresh hand doesn't re-trigger it.
+  const [showRoundScoredModal, setShowRoundScoredModal] = useState(false);
   const [showVoidModal, setShowVoidModal] = useState(false);
   const [voidReason, setVoidReason] = useState<string>('');
 
@@ -776,6 +779,7 @@ const blackPts = Math.max(0, -balance);
     setShowPick(false); setTrumpRevealedBy(null);
     setTrickNum(0); setTurnPlayer(null); setPile([]); setResults([]);
     setRoundMsg(null); setShowVoidModal(false); setVoidReason(''); voidCheckRef.current = false;
+    setShowRoundScoredModal(false);
     setDebugLog([]);
     setMsg('Welcome back! Start a new match.');
   }, [clr]);
@@ -803,6 +807,7 @@ const blackPts = Math.max(0, -balance);
     setIsThanniRound(false); setThanniPartnerId(null); setThanniOutcome(null); setHathBandEligible(false); hathBandEligibleRef.current = false; setIsHathBandRound(false); setHathBandCallerId(null); setHathBandPartnerId(null); setHathBandOutcome(null);
     setTrump(null); setTrumpCard(null); setTrumpDown(true); setTrumpOpen(false); setShowPick(false); setTrumpRevealedBy(null);
     setTrickNum(0); setTurnPlayer(null); setPile([]); setResults([]); setRoundMsg(null);
+    setShowRoundScoredModal(false);
     voidCheckRef.current = false; setShowVoidModal(false); setVoidReason('');
     setDebugLog([]);
     setMsg(`Cards dealt (4 each). ${pName(fb)} bids first.`);
@@ -1187,6 +1192,14 @@ const blackPts = Math.max(0, -balance);
       setDealerId(computeNextDealer(dealerId, nrp, nbp, players));
     }
   }, [bidWinner, curBid, isThanniRound, hathBandCallerId, gp, balance, dealerId, players, pName]);
+
+  // Auto-open the Round Scored modal (Review Tricks / Next Hand) when a regular
+  // round ends. Solo rounds (Thanni / Hath Band) are handled by SoloBidResultModal.
+  useEffect(() => {
+    if (status === 'ROUND_SCORED' && !thanniOutcome && !hathBandOutcome) {
+      setShowRoundScoredModal(true);
+    }
+  }, [status, thanniOutcome, hathBandOutcome]);
 
   // ─── PLAY A CARD ───
   // Trick size: 4 in a normal round, 3 in a solo round (Thanni / Hath Band — partner folded).
@@ -1629,14 +1642,15 @@ const blackPts = Math.max(0, -balance);
             <span className="text-xs text-gray-300">🏆 {gp(PID).tricksWon} tricks · {gp(PID).pointsCaptured}pts</span>
           )}
 
-          {/* Tricks Won Card — clickable to open modal */}
+          {/* Tricks Won Card — clickable to open all-tricks modal */}
           {(status === 'PLAYING' || status === 'TRUMP_REVEALED' || status === 'ROUND_SCORED') && (() => {
             const redTricks = results.filter(r => gp(r.winnerPlayerId).team === 'RED');
+            const hasTricks = results.length > 0;
             return (
               <button
-                onClick={() => redTricks.length > 0 && setShowTricksModal(true)}
-                className={`flex flex-col items-center justify-center w-14 h-20 sm:w-16 sm:h-24 rounded-lg shadow-lg border-2 transition-all ${redTricks.length > 0 ? 'bg-gradient-to-br from-red-600 to-red-800 border-red-400 hover:scale-105 cursor-pointer active:scale-95' : 'bg-gray-700 border-gray-500 opacity-50 cursor-default'}`}
-                aria-label="Tricks won by your team">
+                onClick={() => hasTricks && setShowTricksModal(true)}
+                className={`flex flex-col items-center justify-center w-14 h-20 sm:w-16 sm:h-24 rounded-lg shadow-lg border-2 transition-all ${hasTricks ? 'bg-gradient-to-br from-red-600 to-red-800 border-red-400 hover:scale-105 cursor-pointer active:scale-95' : 'bg-gray-700 border-gray-500 opacity-50 cursor-default'}`}
+                aria-label="Review all tricks">
                 <span className="text-white text-xl sm:text-2xl font-bold leading-none">{redTricks.length}</span>
                 <span className="text-red-100 text-[10px] sm:text-xs font-bold mt-1">TRICKS</span>
               </button>
@@ -1644,12 +1658,6 @@ const blackPts = Math.max(0, -balance);
           })()}
 
           <div className="flex flex-wrap justify-center gap-2 mt-2 w-full max-w-md">
-            {status === "ROUND_SCORED" && !thanniOutcome && !hathBandOutcome && (
-              <button onClick={() => deal()}
-                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold rounded-lg shadow transition-all active:scale-95">
-                Next Hand
-              </button>
-            )}
             {status === 'MATCH_OVER' && (
               <button onClick={handleNewMatch}
                 className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold rounded-lg shadow transition-all active:scale-95">
@@ -1673,17 +1681,21 @@ const blackPts = Math.max(0, -balance);
         </div>
       </div>
 
-      {/* Tricks Won Modal */}
+      {/* Tricks Won Modal — shows ALL tricks with who won and points */}
       {showTricksModal && (() => {
-        const redTricks = results.filter(r => gp(r.winnerPlayerId).team === 'RED');
+        const allTricks = results;
+        const redCount = allTricks.filter(r => gp(r.winnerPlayerId).team === 'RED').length;
+        const blackCount = allTricks.length - redCount;
         return (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4" onClick={() => setShowTricksModal(false)}>
-            <div className="bg-gradient-to-br from-gray-800 to-gray-900 rounded-2xl shadow-2xl border-2 border-red-500/50 max-w-2xl w-full max-h-[80vh] overflow-y-auto p-4 sm:p-6" onClick={e => e.stopPropagation()}>
+          <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4" onClick={() => setShowTricksModal(false)}>
+            <div className="bg-gradient-to-br from-gray-800 to-gray-900 rounded-2xl shadow-2xl border-2 border-yellow-500/50 max-w-2xl w-full max-h-[80vh] overflow-y-auto p-4 sm:p-6" onClick={e => e.stopPropagation()}>
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-2">
-                  <span className="text-red-400 text-xl">♥</span>
-                  <h2 className="text-lg sm:text-xl font-bold text-white">Your Team Tricks</h2>
-                  <span className="bg-red-600 text-white text-sm font-bold px-2 py-0.5 rounded-full">{redTricks.length}</span>
+                  <span className="text-yellow-400 text-xl">🏆</span>
+                  <h2 className="text-lg sm:text-xl font-bold text-white">All Tricks</h2>
+                  <span className="bg-gray-700 text-white text-sm font-bold px-2 py-0.5 rounded-full">{allTricks.length}</span>
+                  <span className="text-xs text-red-300 font-bold ml-1">RED {redCount}</span>
+                  <span className="text-xs text-gray-300 font-bold">BLACK {blackCount}</span>
                 </div>
                 <button
                   onClick={() => setShowTricksModal(false)}
@@ -1691,19 +1703,22 @@ const blackPts = Math.max(0, -balance);
                   ×
                 </button>
               </div>
-              {redTricks.length === 0 ? (
-                <div className="text-center py-8 text-gray-400">No tricks won yet. Keep playing!</div>
+              {allTricks.length === 0 ? (
+                <div className="text-center py-8 text-gray-400">No tricks played yet.</div>
               ) : (
                 <div className="flex flex-col gap-3">
-                  {redTricks.map((trick, i) => {
+                  {allTricks.map((trick, i) => {
                     const tot = trick.playedCards.reduce((s, x) => s + x.card.pointValue, 0);
+                    const winTeam = gp(trick.winnerPlayerId).team;
+                    const borderCls = winTeam === 'RED' ? 'border-red-500/40' : 'border-gray-500/40';
+                    const winnerCls = winTeam === 'RED' ? 'text-red-300' : 'text-gray-200';
                     return (
-                      <div key={i} className="bg-gray-700/50 rounded-xl p-3 border border-red-500/20">
+                      <div key={i} className={`bg-gray-700/50 rounded-xl p-3 border ${borderCls}`}>
                         <div className="flex items-center justify-between mb-2">
-                          <span className="text-red-300 font-bold text-sm">Trick {trick.playedCards[0]?.trickNumber ?? i + 1}</span>
+                          <span className={`font-bold text-sm ${winnerCls}`}>Trick {trick.playedCards[0]?.trickNumber ?? i + 1}</span>
                           <span className="text-yellow-400 text-sm font-bold">+{tot} pts</span>
                         </div>
-                        <div className="text-xs text-gray-400 mb-2">Won by {pName(trick.winnerPlayerId)}</div>
+                        <div className="text-xs text-gray-400 mb-2">Won by <span className={`font-bold ${winnerCls}`}>{pName(trick.winnerPlayerId)}</span> ({winTeam})</div>
                         <div className="flex gap-2 flex-wrap">
                           {trick.playedCards.map((pc, j) => (
                             <div key={j} className="flex flex-col items-center gap-0.5">
@@ -1722,8 +1737,49 @@ const blackPts = Math.max(0, -balance);
               <div className="flex justify-center mt-4 pt-3 border-t border-gray-600">
                 <button
                   onClick={() => setShowTricksModal(false)}
-                  className="px-6 py-2 bg-red-600 hover:bg-red-500 text-white text-sm font-bold rounded-lg shadow transition-all active:scale-95">
+                  className="px-6 py-2 bg-gray-600 hover:bg-gray-500 text-white text-sm font-bold rounded-lg shadow transition-all active:scale-95">
                   Close
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Round Scored Modal — auto-opens after a regular round. Two actions: Review Tricks / Next Hand */}
+      {showRoundScoredModal && status === 'ROUND_SCORED' && !thanniOutcome && !hathBandOutcome && (() => {
+        const redTricks = results.filter(r => gp(r.winnerPlayerId).team === 'RED').length;
+        const blackTricks = results.length - redTricks;
+        const redPts = players.filter(p => p.team === 'RED').reduce((s, p) => s + p.pointsCaptured, 0);
+        const blackPts = players.filter(p => p.team === 'BLACK').reduce((s, p) => s + p.pointsCaptured, 0);
+        return (
+          <div className="fixed inset-0 z-[55] flex items-center justify-center bg-black/85 backdrop-blur-sm p-4">
+            <div className="bg-gradient-to-br from-gray-800 to-gray-900 rounded-2xl shadow-2xl border-2 border-yellow-500/60 max-w-md w-full p-5 sm:p-6 text-center">
+              <div className="text-4xl mb-2">🎯</div>
+              <h2 className="text-2xl sm:text-3xl font-black text-yellow-400 mb-1">Round Complete</h2>
+              <p className="text-xs text-gray-400 mb-4">{curBid ? `${getBidDisplayName(curBid.amount, curBid.kind)} by ${pName(bidWinner!)} (${gp(bidWinner!).team === 'RED' ? '♥ RED' : '♠ BLACK'})` : 'Hand complete'}</p>
+              <div className="grid grid-cols-2 gap-3 mb-5">
+                <div className="bg-red-900/40 rounded-lg p-3 border border-red-500/30">
+                  <div className="text-xs text-red-300 font-bold mb-1">♥ RED</div>
+                  <div className="text-2xl font-black text-red-300">{redTricks} <span className="text-xs font-normal">tricks</span></div>
+                  <div className="text-sm text-red-200">{redPts} pts</div>
+                </div>
+                <div className="bg-gray-700/60 rounded-lg p-3 border border-gray-500/40">
+                  <div className="text-xs text-gray-300 font-bold mb-1">♠ BLACK</div>
+                  <div className="text-2xl font-black text-gray-200">{blackTricks} <span className="text-xs font-normal">tricks</span></div>
+                  <div className="text-sm text-gray-300">{blackPts} pts</div>
+                </div>
+              </div>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <button
+                  onClick={() => setShowTricksModal(true)}
+                  className="flex-1 px-4 py-2.5 bg-yellow-600 hover:bg-yellow-500 text-white text-sm font-bold rounded-lg shadow transition-all active:scale-95">
+                  📋 Review Tricks
+                </button>
+                <button
+                  onClick={() => { setShowRoundScoredModal(false); deal(); }}
+                  className="flex-1 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold rounded-lg shadow transition-all active:scale-95">
+                  ▶ Next Hand
                 </button>
               </div>
             </div>
