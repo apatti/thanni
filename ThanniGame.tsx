@@ -99,6 +99,24 @@ function CardC({ card, faceDown = false, small = false, onClick, highlighted = f
   );
 }
 
+// ─── Compact Hand (mobile-only opponent stack) ───────────────────────
+// One face-down card + a "×N" badge. Used for side opponents on mobile so the
+// middle row doesn't overflow the viewport and AI names stay visible.
+function CompactHand({ count, active = false }: { count: number; active?: boolean }): ReactNode {
+  return (
+    <div className="flex flex-col items-center gap-1">
+      <div className={`relative ${active ? 'scale-110' : ''} transition-transform duration-300`}>
+        <CardC faceDown small />
+        {count > 1 && (
+          <span className="absolute -bottom-1 -right-1 min-w-[1.25rem] h-5 px-1 rounded-full bg-yellow-500 text-gray-900 text-[10px] font-extrabold flex items-center justify-center shadow ring-2 ring-gray-900">
+            ×{count}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Hand Renderer ────────────────────────────────────────────────────
 function HandR({ cards, label, hlSet, onClick, isMine = false, active = false, fd = false }: {
   cards: Card[]; label: string; hlSet?: Set<string>;
@@ -1325,7 +1343,7 @@ const blackPts = Math.max(0, -balance);
   // RENDER — MAIN GAME TABLE
   // ══════════════════════════════════════════════════════════════════════
   return (
-    <div className="min-h-screen bg-gradient-to-b from-green-900 via-green-800 to-emerald-900 flex flex-col items-center p-2 sm:p-4 overflow-auto pb-8">
+    <div className="min-h-screen bg-gradient-to-b from-green-900 via-green-800 to-emerald-900 flex flex-col items-center p-1 sm:p-4 overflow-auto pb-4 sm:pb-8">
       {/* Header */}
       <div className="w-full max-w-4xl mx-auto mb-2">
         <div className="flex items-center justify-between">
@@ -1405,13 +1423,14 @@ const blackPts = Math.max(0, -balance);
       {/* GAME TABLE */}
       <div className="w-full max-w-4xl flex flex-col items-center justify-center flex-1 relative mt-2">
         {/* Top (p0 = Partner) */}
-        <div className="w-full flex justify-center mb-2">
+        <div className="w-full flex justify-center mb-1 sm:mb-2">
           <div className="flex flex-col items-center">
             <div className="flex items-center gap-2 mb-1">
               <PlayerAvatar name={pName('p0')} team={gp('p0').team} active={turnPlayer === 'p0'} />
-              <span className={`text-xs font-semibold ${turnPlayer === 'p0' ? 'text-yellow-400 animate-pulse' : 'text-gray-400'}`}>{pName('p0')} — {gh('p0').length} cards</span>
+              <span className={`text-xs sm:text-sm font-semibold whitespace-nowrap ${turnPlayer === 'p0' ? 'text-yellow-400 animate-pulse' : 'text-gray-400'}`}>{pName('p0')} — {gh('p0').length} cards</span>
             </div>
-            <HandR cards={gh('p0')} label="" active={turnPlayer === 'p0'} fd={!debugMode} />
+            <div className="sm:hidden"><CompactHand count={gh('p0').length} active={turnPlayer === 'p0'} /></div>
+            <div className="hidden sm:block"><HandR cards={gh('p0')} label="" active={turnPlayer === 'p0'} fd={!debugMode} /></div>
             {status === 'BIDDING_PHASE1' && bidActions['p0'] && (
               <span className={`text-xs font-bold mt-1 px-2 py-0.5 rounded ${bidBadgeClass(bidActions['p0'])}`}>{bidActions['p0']}</span>
             )}
@@ -1423,10 +1442,11 @@ const blackPts = Math.max(0, -balance);
 
         <div className="w-full flex items-center justify-center gap-2 sm:gap-4 flex-1">
           {/* Left (p3) */}
-          <div className="flex-shrink-0 flex flex-col items-center">
+          <div className="flex-shrink-0 flex flex-col items-center w-16 sm:w-auto">
             <PlayerAvatar name={pName('p3')} team={gp('p3').team} active={turnPlayer === 'p3'} />
-            <span className={`text-xs font-semibold mt-1 ${turnPlayer === 'p3' ? 'text-yellow-400 animate-pulse' : 'text-gray-400'}`}>{pName('p3')} — {gh('p3').length}</span>
-            <HandR cards={gh('p3')} label="" active={turnPlayer === 'p3'} fd={!debugMode} />
+            <span className={`text-xs sm:text-sm font-semibold mt-1 whitespace-nowrap text-center ${turnPlayer === 'p3' ? 'text-yellow-400 animate-pulse' : 'text-gray-400'}`}>{pName('p3')}</span>
+            <div className="sm:hidden mt-1"><CompactHand count={gh('p3').length} active={turnPlayer === 'p3'} /></div>
+            <div className="hidden sm:block"><HandR cards={gh('p3')} label="" active={turnPlayer === 'p3'} fd={!debugMode} /></div>
             {status === 'BIDDING_PHASE1' && bidActions['p3'] && (
               <span className={`text-xs font-bold mt-1 px-2 py-0.5 rounded ${bidBadgeClass(bidActions['p3'])}`}>{bidActions['p3']}</span>
             )}
@@ -1545,7 +1565,7 @@ const blackPts = Math.max(0, -balance);
             })()}
 
             {/* Trick pile */}
-            <div className="w-full h-32 sm:h-40 bg-black/20 rounded-xl border-2 border-dashed border-yellow-500/50 flex items-center justify-center relative mb-4">
+            <div className="w-full h-32 sm:h-40 bg-black/20 rounded-xl border-2 border-dashed border-yellow-500/50 flex items-center justify-center relative mb-2 sm:mb-4">
               {pile.length > 0 ? (
                 <div className="flex gap-1 sm:gap-2">
                   {pile.map((pc, i) => (
@@ -1574,10 +1594,11 @@ const blackPts = Math.max(0, -balance);
           </div>
 
           {/* Right (p1) */}
-          <div className="flex-shrink-0 flex flex-col items-center">
+          <div className="flex-shrink-0 flex flex-col items-center w-16 sm:w-auto">
             <PlayerAvatar name={pName('p1')} team={gp('p1').team} active={turnPlayer === 'p1'} />
-            <span className={`text-xs font-semibold mt-1 ${turnPlayer === 'p1' ? 'text-yellow-400 animate-pulse' : 'text-gray-400'}`}>{pName('p1')} — {gh('p1').length}</span>
-            <HandR cards={gh('p1')} label="" active={turnPlayer === 'p1'} fd={!debugMode} />
+            <span className={`text-xs sm:text-sm font-semibold mt-1 whitespace-nowrap text-center ${turnPlayer === 'p1' ? 'text-yellow-400 animate-pulse' : 'text-gray-400'}`}>{pName('p1')}</span>
+            <div className="sm:hidden mt-1"><CompactHand count={gh('p1').length} active={turnPlayer === 'p1'} /></div>
+            <div className="hidden sm:block"><HandR cards={gh('p1')} label="" active={turnPlayer === 'p1'} fd={!debugMode} /></div>
             {status === 'BIDDING_PHASE1' && bidActions['p1'] && (
               <span className={`text-xs font-bold mt-1 px-2 py-0.5 rounded ${bidBadgeClass(bidActions['p1'])}`}>{bidActions['p1']}</span>
             )}
@@ -1587,11 +1608,12 @@ const blackPts = Math.max(0, -balance);
           </div>
         </div>
 
-        {/* Your hand */}
-        <div className="w-full flex flex-col items-center gap-2 mt-4">
-          <div className="flex items-center gap-2">
-            <PlayerAvatar name={pName(PID)} team="RED" active={isMy || showPick} />
-            <span className={`text-xs font-semibold ${isMy || showPick ? 'text-yellow-400 animate-pulse' : 'text-gray-400'}`}>
+        {/* Your hand — sticky bottom panel so cards are always visible without scrolling */}
+        <div className="w-full sticky bottom-0 z-20 bg-gradient-to-t from-green-950 via-green-900/95 to-green-900/0 -mx-1 sm:mx-0 px-1 sm:px-0 pt-3 pb-3">
+          <div className="w-full flex flex-col items-center gap-2">
+            <div className="flex items-center gap-2">
+              <PlayerAvatar name={pName(PID)} team="RED" active={isMy || showPick} />
+              <span className={`text-xs sm:text-sm font-semibold whitespace-nowrap ${isMy || showPick ? 'text-yellow-400 animate-pulse' : 'text-gray-400'}`}>
               {showPick ? `TAP A CARD — its suit becomes Trump (${myHand.length} cards)` : `YOUR HAND (${myHand.length} cards) ${isMy ? '— YOUR TURN' : ''}`}
             </span>
           </div>
@@ -1648,22 +1670,7 @@ const blackPts = Math.max(0, -balance);
             )}
           </div>
         </div>
-      </div>
-
-      {/* Footer */}
-      <div className="w-full max-w-2xl mx-auto py-3 flex justify-center gap-3 flex-wrap border-t border-gray-700 mt-4 pt-3">
-        {status === "ROUND_SCORED" && !thanniOutcome && !hathBandOutcome && (
-          <button onClick={() => deal()}
-            className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold rounded-lg shadow transition-all active:scale-95">
-            Next Hand
-          </button>
-        )}
-        {status === 'MATCH_OVER' && (
-          <button onClick={handleNewMatch}
-            className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold rounded-lg shadow transition-all active:scale-95">
-            New Match
-          </button>
-        )}
+        </div>
       </div>
 
       {/* Tricks Won Modal */}
