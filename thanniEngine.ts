@@ -156,12 +156,24 @@ export interface BiddingState {
 }
 
 /**
- * Team score in the 6-card deck match-point system.
+ * Team score (per-team view of the differential match balance).
+ *
+ * The match uses a SINGLE signed `balance` (positive = RED leads, negative =
+ * BLACK leads). The two teams can never both be in positive territory — a
+ * scoring event for one team first negates any positive balance the other
+ * team holds, and only overflows past zero into the winning team's side.
+ *
+ * `points` is derived: `redTeamScore.points === max(0, balance)` and
+ * `blackTeamScore.points === max(0, -balance)`. Both teams' `points` are
+ * kept in sync on each round-scoring call for display convenience.
+ *
+ * `isFaceUp` flips true the first time a team's derived `points` become
+ * positive; it never flips back to false. It is a UI / dealer-rotation
+ * affordance only — it no longer gates where points are applied.
  */
 export interface TeamScore {
-  points: number; // Active match points
-  pendingPoints: number; // Banked points waiting to be applied
-  isFaceUp: boolean; // Whether the team's score card is revealed
+  points: number; // DERIVED: max(0, ±balance). Kept in sync on each scoring call.
+  isFaceUp: boolean; // True once this team has ever been in positive territory.
   scoreCards: Array<{
     cardId: string; // e.g., "red_0", "black_2"
     scoredAt: number | null; // timestamp when scored, null = face-down
@@ -234,6 +246,15 @@ export interface GameState {
   
   /** Black team (Spades) score. */
   blackTeamScore: TeamScore;
+
+  /**
+   * Differential match balance: positive = RED leads by `balance`, negative =
+   * BLACK leads by `|balance|`, zero = tied. Single source of truth — the
+   * `redTeamScore.points` / `blackTeamScore.points` fields are derived from
+   * this on every round-scoring call (`max(0, balance)` and `max(0, -balance)`
+   * respectively). The two teams can never both be positive.
+   */
+  balance: number;
 
   /** Match goal. Default 12. */
   matchGoal: number;
@@ -1066,17 +1087,26 @@ export function cardValueStrength(value: CardValue): number {
 // ============================================================================
 
 /**
- * Result of round scoring.
+ * Result of round scoring under the differential (tug-of-war) model.
+ *
+ * The single signed `balanceShift` is the only authoritative change — it is
+ * added to `GameState.balance` (positive = RED gain, negative = BLACK gain).
+ * The derived per-team match-point deltas (`redTeamMatchPointsChange` /
+ * `blackTeamMatchPointsChange`) are convenience snapshots of how the derived
+ * `points` fields change for each side (they will never both be positive —
+ * one is always 0 since only one side can be in positive territory).
  */
 export interface RoundScoringResult {
   biddingTeam: Team;
   biddingTeamActualPoints: number;
   biddingTeamBid: number;
   metBid: boolean;
+  /** Single signed shift applied to GameState.balance. Positive → RED, negative → BLACK. */
+  balanceShift: number;
+  /** Derived: change to redTeamScore.points (>=0). */
   redTeamMatchPointsChange: number;
+  /** Derived: change to blackTeamScore.points (>=0). */
   blackTeamMatchPointsChange: number;
-  redTeamPendingPointsChange: number;
-  blackTeamPendingPointsChange: number;
   matchOver: boolean;
   winner: Team | null;
 }
@@ -1090,6 +1120,14 @@ export function getBiddingTeam(
 ): Team {
   const winner = players.get(bidWinnerId);
   return winner!.team;
+}
+
+/**
+ * Compute the signed balance shift toward `gainTeam` by `gainAmount`.
+ * Positive result = shift toward RED, negative = shift toward BLACK.
+ */
+function shiftToward(gainTeam: Team, gainAmount: number): number {
+  return gainTeam === 'RED' ? gainAmount : -gainAmount;
 }
 
 /**
@@ -1117,10 +1155,19 @@ export function calculateTeamPoints(
 }
 
 /**
- * Compute a RoundScoringResult given the bidding team, success flag, and
- * the met/failed multipliers. Shared by the standard bid path and the
- * Thanni path (the Thanni path also subtracts `failedBiddingPenalty`
- * match points from the bidding team on failure).
+ * Compute a RoundScoringResult under the differential (tug-of-war) model.
+ *
+ * Each scoring event produces a single signed `balanceShift` toward the
+ * gaining team — the bid-team on a make, the opposition on a miss. The
+ * derived per-team `points` change is computed from the pre/post `balance`
+ * (one side is always 0 since both can never be positive simultaneously).
+ *
+ * Note: the `failedBiddingPenalty` and `swingOnFail` parameters are kept for
+ * API stability but are subsumed by the differential shift — a "miss" gives
+ * the opposition `failedOppositionMultiplier` points, which (under the
+ * tug-of-war) already negates any positive balance the bidding team held
+ * before overflowing into the opposition's side. No explicit bidding-team
+ * subtraction is needed (it falls out of the single signed shift).
  */
 function computeRoundScoringResult(
   gameState: GameState,
@@ -1129,88 +1176,59 @@ function computeRoundScoringResult(
   metBid: boolean,
   metMultiplier: number,
   failedOppositionMultiplier: number,
-  failedBiddingPenalty: number,
-  swingOnFail: boolean,
+  _failedBiddingPenalty: number,
+  _swingOnFail: boolean,
 ): RoundScoringResult {
-  const redTeam = gameState.redTeamScore;
-  const blackTeam = gameState.blackTeamScore;
+  const opposition: Team = biddingTeam === 'RED' ? 'BLACK' : 'RED';
+  const gainTeam: Team = metBid ? biddingTeam : opposition;
+  const gainAmount: number = metBid ? metMultiplier : failedOppositionMultiplier;
+  const balanceShift = shiftToward(gainTeam, gainAmount);
 
-  let redMatchPointsChange = 0;
-  let blackMatchPointsChange = 0;
-  let redPendingChange = 0;
-  let blackPendingChange = 0;
-
-  if (metBid) {
-    const biddingTeamScore = biddingTeam === 'RED' ? redTeam : blackTeam;
-    const oppositionScore = biddingTeam === 'RED' ? blackTeam : redTeam;
-    if (biddingTeamScore.isFaceUp) {
-      if (biddingTeam === 'RED') redMatchPointsChange = metMultiplier;
-      else blackMatchPointsChange = metMultiplier;
-    } else {
-      if (oppositionScore.isFaceUp) {
-        if (biddingTeam === 'RED') blackPendingChange = -metMultiplier;
-        else redPendingChange = -metMultiplier;
-      }
-    }
-  } else {
-    const oppositionScore = biddingTeam === 'RED' ? blackTeam : redTeam;
-    if (oppositionScore.isFaceUp) {
-      if (biddingTeam === 'RED') blackMatchPointsChange = failedOppositionMultiplier;
-      else redMatchPointsChange = failedOppositionMultiplier;
-    } else {
-      if (biddingTeam === 'RED') blackPendingChange = failedOppositionMultiplier;
-      else redPendingChange = failedOppositionMultiplier;
-    }
-    if (swingOnFail && failedBiddingPenalty > 0) {
-      // Subtract failedBiddingPenalty from the bidding team's active match points (floored at 0).
-      if (biddingTeam === 'RED') redMatchPointsChange -= failedBiddingPenalty;
-      else blackMatchPointsChange -= failedBiddingPenalty;
-    }
-  }
-
-  // Apply changes to scores
-  const newRedScore: TeamScore = {
-    ...redTeam,
-    points: Math.max(0, redTeam.points + redMatchPointsChange),
-    pendingPoints: redTeam.pendingPoints + redPendingChange,
-  };
-  const newBlackScore: TeamScore = {
-    ...blackTeam,
-    points: Math.max(0, blackTeam.points + blackMatchPointsChange),
-    pendingPoints: blackTeam.pendingPoints + blackPendingChange,
-  };
+  const newBalance = gameState.balance + balanceShift;
+  const oldRedPts = Math.max(0, gameState.balance);
+  const oldBlackPts = Math.max(0, -gameState.balance);
+  const newRedPts = Math.max(0, newBalance);
+  const newBlackPts = Math.max(0, -newBalance);
 
   let matchOver = false;
   let winner: Team | null = null;
-  if (newRedScore.points >= MATCH_GOAL) { matchOver = true; winner = 'RED'; }
-  else if (newBlackScore.points >= MATCH_GOAL) { matchOver = true; winner = 'BLACK'; }
+  if (newBalance >= gameState.matchGoal) { matchOver = true; winner = 'RED'; }
+  else if (newBalance <= -gameState.matchGoal) { matchOver = true; winner = 'BLACK'; }
 
   return {
     biddingTeam,
     biddingTeamActualPoints: 0,
     biddingTeamBid: bidAmount,
     metBid,
-    redTeamMatchPointsChange: redMatchPointsChange,
-    blackTeamMatchPointsChange: blackMatchPointsChange,
-    redTeamPendingPointsChange: redPendingChange,
-    blackTeamPendingPointsChange: blackPendingChange,
+    balanceShift,
+    redTeamMatchPointsChange: newRedPts - oldRedPts,
+    blackTeamMatchPointsChange: newBlackPts - oldBlackPts,
     matchOver,
     winner,
   };
 }
 
 /**
- * Apply round scoring per PRD Section 2.4 / Section 4.
+ * Apply round scoring per the differential (tug-of-war) model:
  *
- * HIGH-VALUE BONUS RULE (BID >= 200):
- *   Met + face-up: +2 match points to bidding team
- *   Met + face-down: reduce opposition's face-up score by -2
- *   Failed: opposition gets +4 match points
+ *   The match has a single signed `balance`: positive = RED leads,
+ *   negative = BLACK leads. A scoring event for one team first negates
+ *   any positive balance the other team holds, then overflows into the
+ *   gaining team's side. The two teams can never both be positive.
  *
  * STANDARD BIDS (BID < 200):
- *   Met + face-up: +1 match point to bidding team
- *   Met + face-down: reduce opposition's face-up score by -1
- *   Failed: opposition gets +2 match points
+ *   Met: bidding team gains +1 (shifts balance toward them by 1).
+ *   Failed: opposition gains +2.
+ *
+ * HIGH-VALUE BIDS (BID >= 200 — John / John 10 / John 20 / up to 328):
+ *   Met: bidding team gains +2.
+ *   Failed: opposition gains +4.
+ *
+ * THANNI BID:
+ *   Met (bidder wins all 4 tricks): bidding team gains +4.
+ *   Failed: opposition gains +8.
+ *
+ * Match over when |balance| >= matchGoal (default 12).
  */
 export function applyRoundScoring(
   gameState: GameState,
@@ -1221,7 +1239,8 @@ export function applyRoundScoring(
   const isThanni = bid.kind === 'THANNI';
   const bidAmount = bid.amount;
 
-  // Thanni scoring: bidder must win ALL 4 tricks. ±4 met; bidding team −8 AND opp +8 on fail.
+  // Thanni scoring: bidder must win ALL 4 tricks. +4 met (bidding team);
+  // opposition +8 on fail (a swing of 8 toward the opposition in differential terms).
   if (isThanni) {
     const bidderId = gameState.thanniBidderId ?? bid.playerId;
     const bidder = gameState.players.get(bidderId);
@@ -1232,108 +1251,27 @@ export function applyRoundScoring(
       bidAmount,
       bidderWonAll4,
       THANNI_WIN_POINTS,
-      THANNI_FAIL_PENALTY, // gained by opposition
-      THANNI_FAIL_PENALTY, // also subtracted from bidding team
-      true, // thanni always swings both ways
+      THANNI_FAIL_PENALTY, // opposition gains +8 (balance shifts 8 toward opp)
+      0, // unused under the differential model
+      false,
     );
   }
 
+  // Standard bid path.
   const metBid = biddingTeamActualPoints >= bidAmount;
-
-  const redTeam = gameState.redTeamScore;
-  const blackTeam = gameState.blackTeamScore;
-
-  let redMatchPointsChange = 0;
-  let blackMatchPointsChange = 0;
-  let redPendingChange = 0;
-  let blackPendingChange = 0;
-
-  // Determine point multiplier based on bid amount
   const isHighValueBid = bidAmount >= 200;
   const metMultiplier = isHighValueBid ? 2 : 1;
   const failedMultiplier = isHighValueBid ? 4 : 2;
-
-  if (metBid) {
-    // BIDDING TEAM MEETS OR EXCEEDS BID
-    const biddingTeamScore = biddingTeam === 'RED' ? redTeam : blackTeam;
-    const oppositionScore = biddingTeam === 'RED' ? blackTeam : redTeam;
-
-    if (biddingTeamScore.isFaceUp) {
-      // Bidding team is face-up: get match points directly
-      if (biddingTeam === 'RED') {
-        redMatchPointsChange = metMultiplier;
-      } else {
-        blackMatchPointsChange = metMultiplier;
-      }
-    } else {
-      // Bidding team is face-down: reduce opposition's face-up score
-      if (oppositionScore.isFaceUp) {
-        if (biddingTeam === 'RED') {
-          blackPendingChange = -metMultiplier; // Reduce black's score
-        } else {
-          redPendingChange = -metMultiplier; // Reduce red's score
-        }
-      }
-      // If opposition is also face-down, no immediate change (banked)
-    }
-  } else {
-    // BIDDING TEAM FAILS TO MEET BID
-    const oppositionScore = biddingTeam === 'RED' ? blackTeam : redTeam;
-
-    if (oppositionScore.isFaceUp) {
-      // Opposition is face-up: they get the points
-      if (biddingTeam === 'RED') {
-        blackMatchPointsChange = failedMultiplier;
-      } else {
-        redMatchPointsChange = failedMultiplier;
-      }
-    } else {
-      // Opposition is face-down: points are pending
-      if (biddingTeam === 'RED') {
-        blackPendingChange = failedMultiplier;
-      } else {
-        redPendingChange = failedMultiplier;
-      }
-    }
-  }
-
-  // Apply changes to scores
-  const newRedScore: TeamScore = {
-    ...redTeam,
-    points: Math.max(0, redTeam.points + redMatchPointsChange),
-    pendingPoints: redTeam.pendingPoints + redPendingChange,
-  };
-  
-  const newBlackScore: TeamScore = {
-    ...blackTeam,
-    points: Math.max(0, blackTeam.points + blackMatchPointsChange),
-    pendingPoints: blackTeam.pendingPoints + blackPendingChange,
-  };
-
-  // Check match goal
-  let matchOver = false;
-  let winner: Team | null = null;
-
-  if (newRedScore.points >= MATCH_GOAL) {
-    matchOver = true;
-    winner = 'RED';
-  } else if (newBlackScore.points >= MATCH_GOAL) {
-    matchOver = true;
-    winner = 'BLACK';
-  }
-
-  return {
+  return computeRoundScoringResult(
+    gameState,
     biddingTeam,
-    biddingTeamActualPoints: biddingTeamActualPoints,
-    biddingTeamBid: bidAmount,
+    bidAmount,
     metBid,
-    redTeamMatchPointsChange: redMatchPointsChange,
-    blackTeamMatchPointsChange: blackMatchPointsChange,
-    redTeamPendingPointsChange: redPendingChange,
-    blackTeamPendingPointsChange: blackPendingChange,
-    matchOver,
-    winner,
-  };
+    metMultiplier,
+    failedMultiplier,
+    0,
+    false,
+  );
 }
 
 /**
@@ -1447,9 +1385,9 @@ export function createInitialState(
     currentTrickNumber: 0,
     currentLeadPlayerId: null,
     trickPile: [],
+    balance: 0, // differential: positive = RED leads, negative = BLACK leads
     redTeamScore: {
       points: 0,
-      pendingPoints: 0,
       isFaceUp: false,
       scoreCards: Array(6).fill(null).map((_, i) => ({
         cardId: `red_${i}`,
@@ -1458,7 +1396,6 @@ export function createInitialState(
     },
     blackTeamScore: {
       points: 0,
-      pendingPoints: 0,
       isFaceUp: false,
       scoreCards: Array(6).fill(null).map((_, i) => ({
         cardId: `black_${i}`,
@@ -1633,8 +1570,11 @@ export function transitionToMatchOver(
  */
 export function transitionToNewRound(gameState: GameState): GameState {
   const newDealer = determineNextDealer(gameState, []);
-  
-  // Reset hands, tricks, bids — but keep match points
+
+  // Reset hands, tricks, bids — but KEEP the differential `balance` and the
+  // `isFaceUp` flags (scoreboard persists across rounds). The derived
+  // `redTeamScore.points` / `blackTeamScore.points` already track `balance`
+  // via the spread below, so no explicit reset is needed.
   const players = new Map(gameState.players);
   for (const [pid, player] of players) {
     players.set(pid, {
@@ -1848,67 +1788,45 @@ export function evaluateRound(
   const bidWinnerId = gameState.bidWinnerId!;
   const biddingTeam = getBiddingTeam(bidWinnerId, gameState.players);
 
-  // Calculate actual points for each team (simplified: sum of all trick card point values won)
-  // In a real implementation, you'd track points per trick. For now, use a placeholder.
+  // Sum points captured by each team this round (used by the standard-bid
+  // path to determine whether the bidding team met their bid).
   let redPoints = 0;
   let blackPoints = 0;
-
-  // Sum points from each player's captured points this round
   for (const [, player] of gameState.players) {
-    if (player.team === 'RED') {
-      redPoints += player.pointsCapturedThisRound;
-    } else {
-      blackPoints += player.pointsCapturedThisRound;
-    }
+    if (player.team === 'RED') redPoints += player.pointsCapturedThisRound;
+    else blackPoints += player.pointsCapturedThisRound;
   }
+  const biddingTeamActualPoints = biddingTeam === 'RED' ? redPoints : blackPoints;
 
-  const biddingTeamActualPoints =
-    biddingTeam === 'RED' ? redPoints : blackPoints;
-
-  // Apply scoring
+  // Compute the single signed balance shift toward the gaining team.
   const scoringResult = applyRoundScoring(
     gameState,
     biddingTeam,
     biddingTeamActualPoints,
   );
 
-  // Update team scores
+  // Apply the shift to the differential balance; derive per-team points
+  // (one side is always 0). isFaceUp flips (and stays flipped) the first time
+  // a team's derived points become positive.
+  const newBalance = gameState.balance + scoringResult.balanceShift;
   const updatedRedScore: TeamScore = {
     ...gameState.redTeamScore,
-    points: Math.max(0, gameState.redTeamScore.points + scoringResult.redTeamMatchPointsChange),
-    pendingPoints:
-      gameState.redTeamScore.pendingPoints +
-      scoringResult.redTeamPendingPointsChange,
+    points: Math.max(0, newBalance),
+    isFaceUp: gameState.redTeamScore.isFaceUp || newBalance > 0,
   };
-
-  // Flip face-up when first scoring
-  if (scoringResult.redTeamMatchPointsChange > 0) {
-    updatedRedScore.isFaceUp = true;
-  }
-
   const updatedBlackScore: TeamScore = {
     ...gameState.blackTeamScore,
-    points: Math.max(
-      0,
-      gameState.blackTeamScore.points +
-        scoringResult.blackTeamMatchPointsChange,
-    ),
-    pendingPoints:
-      gameState.blackTeamScore.pendingPoints +
-      scoringResult.blackTeamPendingPointsChange,
+    points: Math.max(0, -newBalance),
+    isFaceUp: gameState.blackTeamScore.isFaceUp || newBalance < 0,
   };
-
-  if (scoringResult.blackTeamMatchPointsChange > 0) {
-    updatedBlackScore.isFaceUp = true;
-  }
 
   const newState: GameState = {
     ...gameState,
+    balance: newBalance,
     redTeamScore: updatedRedScore,
     blackTeamScore: updatedBlackScore,
   };
 
-  // Check match goal
   if (scoringResult.matchOver) {
     return {
       newState: transitionToMatchOver(newState, scoringResult.winner!),
@@ -1916,7 +1834,6 @@ export function evaluateRound(
     };
   }
 
-  // Continue to next round
   return {
     newState,
     message: `Round scored. ${biddingTeam} team ${scoringResult.metBid ? 'made' : 'missed'} their bid of ${scoringResult.biddingTeamBid}.`,

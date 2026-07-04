@@ -550,9 +550,14 @@ export default function ThanniGame(): ReactNode {
   const [pile, setPile] = useState<PlayedCard[]>([]);
   const [results, setResults] = useState<TrickResult[]>([]);
 
-  // Scores — persist across rounds
-  const [redS, setRedS] = useState({ points: 0, isFaceUp: false });
-  const [blackS, setBlackS] = useState({ points: 0, isFaceUp: false });
+  // Scores — differential balance persists across rounds.
+// `balance > 0` ⇒ Red leads by `balance`, Black = 0; `balance < 0` ⇒ Black leads by `|balance|`, Red = 0.
+// Only one team can ever be positive at a time (tug-of-war model).
+const [balance, setBalance] = useState(0);
+const [redFaceUp, setRedFaceUp] = useState(false);
+const [blackFaceUp, setBlackFaceUp] = useState(false);
+const redPts = Math.max(0, balance);
+const blackPts = Math.max(0, -balance);
 
   // UI
   const [msg, setMsg] = useState('Welcome to Thanni!');
@@ -654,8 +659,7 @@ export default function ThanniGame(): ReactNode {
 
   const handleNewMatch = useCallback(() => {
     clr();
-    setRedS({ points: 0, isFaceUp: false });
-    setBlackS({ points: 0, isFaceUp: false });
+    setRedFaceUp(false); setBlackFaceUp(false); setBalance(0);
     setStatus('LOBBY');
     setGameStarted(false);
     setCardPickPhase('IDLE');
@@ -885,7 +889,11 @@ export default function ThanniGame(): ReactNode {
     doRevealTrump(PID);
   }, [doRevealTrump, trump, trumpOpen]);
 
-  // ─── SCORE ROUND ───
+  // ─── SCORE ROUND (differential / tug-of-war) ───
+  // The match is a single signed balance: positive = RED leads, negative = BLACK leads.
+  // Any scoring event shifts the balance toward the gaining team — the "negate
+  // the other team's positive balance first, overflow to winner" rule falls out
+  // automatically from deriving each side's display as max(0, ±balance).
   const scoreRound = useCallback((res: TrickResult[]) => {
     if (!bidWinner || !curBid) return;
     const cf = curBidRef.current;
@@ -900,45 +908,42 @@ export default function ThanniGame(): ReactNode {
     }
     const bt = gp(bidWinner).team;
     const btp = bt === 'RED' ? rp : bp;
-    let rc = 0, bc = 0;
+    // Determine the gaining team + amount for this round.
+    let gainTeam: Team;
+    let gainAmount: number;
     let resultLabel: string;
     if (isThanni) {
       const targetTricks = isThanniRound ? 4 : 6;
       const met = bidderTricksWon >= targetTricks;
-      if (met) {
-        if (bt === 'RED') rc = THANNI_WIN_POINTS; else bc = THANNI_WIN_POINTS;
-      } else {
-        // Opp +8 and bidding team −8 (floored at 0).
-        if (bt === 'RED') { rc = -THANNI_FAIL_PENALTY; bc = THANNI_FAIL_PENALTY; }
-        else { bc = -THANNI_FAIL_PENALTY; rc = THANNI_FAIL_PENALTY; }
-      }
+      gainTeam = met ? bt : (bt === 'RED' ? 'BLACK' : 'RED');
+      gainAmount = met ? THANNI_WIN_POINTS : THANNI_FAIL_PENALTY;
       resultLabel = `${bt} ${met ? 'made' : 'missed'} Thanni — bidder took ${bidderTricksWon}/${targetTricks} tricks.`;
     } else {
       const met = btp >= cf.amount;
       const hv = cf.amount >= 200;
       const mm = hv ? 2 : 1, fm = hv ? 4 : 2;
-      if (met) {
-        if (bt === 'RED') rc = mm; else bc = mm;
-      } else {
-        if (bt === 'RED') bc = fm; else rc = fm;
-      }
+      gainTeam = met ? bt : (bt === 'RED' ? 'BLACK' : 'RED');
+      gainAmount = met ? mm : fm;
       resultLabel = `${bt} ${met ? 'made' : 'missed'} ${getBidDisplayName(cf.amount)}.`;
     }
-    const nrp = Math.max(0, redS.points + rc), nbp = Math.max(0, blackS.points + bc);
-    const nrf = redS.isFaceUp || rc > 0, nbf = blackS.isFaceUp || bc > 0;
-    setRedS({ points: nrp, isFaceUp: nrf });
-    setBlackS({ points: nbp, isFaceUp: nbf });
+    // Apply the single signed shift to the differential balance.
+    const newBalance = balance + (gainTeam === 'RED' ? gainAmount : -gainAmount);
+    const nrp = Math.max(0, newBalance);
+    const nbp = Math.max(0, -newBalance);
+    setBalance(newBalance);
+    if (nrp > 0) setRedFaceUp(true);
+    if (nbp > 0) setBlackFaceUp(true);
 
     const rm = `${resultLabel} Red ${rp}pts, Black ${bp}pts. Match: Red ${nrp}, Black ${nbp}.`;
     setRoundMsg(rm); setMsg(rm);
 
-    if (nrp >= MATCH_GOAL) { setStatus('MATCH_OVER'); setMsg(`🔴 ${pName('p0')}/${pName('p2')} WIN! ${nrp}-${nbp}`); }
-    else if (nbp >= MATCH_GOAL) { setStatus('MATCH_OVER'); setMsg(`⚫ ${pName('p1')}/${pName('p3')} WIN! ${nbp}-${nrp}`); }
+    if (newBalance >= MATCH_GOAL) { setStatus('MATCH_OVER'); setMsg(`🔴 ${pName('p0')}/${pName('p2')} WIN! ${nrp}-${nbp}`); }
+    else if (newBalance <= -MATCH_GOAL) { setStatus('MATCH_OVER'); setMsg(`⚫ ${pName('p1')}/${pName('p3')} WIN! ${nbp}-${nrp}`); }
     else {
       setStatus('ROUND_SCORED');
       setDealerId(computeNextDealer(dealerId, nrp, nbp, players));
     }
-  }, [bidWinner, curBid, isThanniRound, gp, redS, blackS, dealerId, players, pName]);
+  }, [bidWinner, curBid, isThanniRound, gp, balance, dealerId, players, pName]);
 
   // ─── PLAY A CARD ───
   // Trick size: 4 normally, 3 in a Thanni round (partner folded).
@@ -1082,7 +1087,7 @@ export default function ThanniGame(): ReactNode {
         </div>
       </div>
 
-      <ScoreBoard red={redS} black={blackS} />
+      <ScoreBoard red={{ points: redPts, isFaceUp: redFaceUp }} black={{ points: blackPts, isFaceUp: blackFaceUp }} />
 
       {msg && (
         <div className="w-full max-w-2xl mx-auto mt-2 p-2 bg-gray-800/60 rounded-lg text-center border border-yellow-500/30">
@@ -1404,12 +1409,12 @@ export default function ThanniGame(): ReactNode {
 
       {/* Match Over Modal */}
       {status === 'MATCH_OVER' && (() => {
-        const winner: Team = redS.points >= blackS.points ? 'RED' : 'BLACK';
+        const winner: Team = balance >= 0 ? 'RED' : 'BLACK';
         return (
           <MatchOverModal
             winner={winner}
-            redPoints={redS.points}
-            blackPoints={blackS.points}
+            redPoints={redPts}
+            blackPoints={blackPts}
             pName={pName}
             onNewMatch={handleNewMatch}
           />

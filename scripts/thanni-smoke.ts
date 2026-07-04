@@ -202,9 +202,9 @@ cases.push({
   },
 });
 
-// Case 9: applyRoundScoring for a made Thanni → bidding team +4 (or banked if face-down).
+// Case 9: Made Thanni (differential model): balance shifts +4 toward bidding team.
 cases.push({
-  name: 'applyRoundScoring for a made Thanni bid awards +4 to bidding team',
+  name: 'Made Thanni: balance shifts +4 toward bidding team (RED)',
   fn: () => {
     let state = createInitialState('p1');
     state = transitionToBiddingPhase1(state);
@@ -217,21 +217,20 @@ cases.push({
     const r = placeThanniBid(patched.biddingState, 'p2', weakHand);
     patched = { ...patched, biddingState: r.newState! };
     patched = transitionToThanniPlaying(patched);
-    // Bidding team (RED) face-up so the +4 actually pays out into match points.
-    patched = { ...patched, redTeamScore: { ...patched.redTeamScore, isFaceUp: true } };
     const players = new Map(patched.players);
     players.set('p2', { ...players.get('p2')!, tricksWonThisRound: 4 });
     patched = { ...patched, players };
     const result = applyRoundScoring(patched, 'RED', 0);
+    assertEq('balanceShift (RED gain)', result.balanceShift, THANNI_WIN_POINTS);
     assertEq('red match-point delta', result.redTeamMatchPointsChange, THANNI_WIN_POINTS);
     assertEq('black match-point delta', result.blackTeamMatchPointsChange, 0);
     assertEq('metBid', result.metBid, true);
   },
 });
 
-// Case 10: applyRoundScoring for a failed Thanni → opp +8 AND bidding team −8.
+// Case 10: Failed Thanni (differential model): balance shifts 8 toward opposition.
 cases.push({
-  name: 'applyRoundScoring for a failed Thanni bid: opp +8 and bidding team −8',
+  name: 'Failed Thanni by RED: balance shifts -8 (BLACK +8, RED stays 0)',
   fn: () => {
     let state = createInitialState('p1');
     state = transitionToBiddingPhase1(state);
@@ -244,15 +243,14 @@ cases.push({
     const r = placeThanniBid(patched.biddingState, 'p2', weakHand);
     patched = { ...patched, biddingState: r.newState! };
     patched = transitionToThanniPlaying(patched);
-    // Make opposition face-up so the +8 shows as black match-point change.
-    patched = { ...patched, blackTeamScore: { ...patched.blackTeamScore, isFaceUp: true } };
-    // Bidder only won 2 tricks → missed Thanni.
     const players = new Map(patched.players);
     players.set('p2', { ...players.get('p2')!, tricksWonThisRound: 2 });
     patched = { ...patched, players };
     const result = applyRoundScoring(patched, 'RED', 0);
-    assertEq('red match-point delta (bidding team penalty)', result.redTeamMatchPointsChange, -THANNI_FAIL_PENALTY);
-    assertEq('black match-point delta (opposition reward)', result.blackTeamMatchPointsChange, THANNI_FAIL_PENALTY);
+    assertEq('balanceShift (BLACK gain)', result.balanceShift, -THANNI_FAIL_PENALTY);
+    // balance started at 0, new balance = -8 → red derived = 0 (no change), black derived = 8.
+    assertEq('red match-point delta (bidding team at 0)', result.redTeamMatchPointsChange, 0);
+    assertEq('black match-point delta (opposition +8)', result.blackTeamMatchPointsChange, THANNI_FAIL_PENALTY);
     assertEq('metBid', result.metBid, false);
   },
 });
@@ -294,6 +292,179 @@ cases.push({
     ];
     const res = evaluateTrickWithContext(pile, null);
     assertEq('trick winner (opp1)', res.winnerPlayerId, 'p1');
+  },
+});
+
+// ─── Differential (tug-of-war) scenarios ─────────────────────────────────
+
+// Helper: build a patched state with balance + derived points + face-up flags in sync.
+function stateWithBalance(base: GameState, balance: number): GameState {
+  return {
+    ...base,
+    balance,
+    redTeamScore: { ...base.redTeamScore, points: Math.max(0, balance), isFaceUp: balance > 0 || base.redTeamScore.isFaceUp },
+    blackTeamScore: { ...base.blackTeamScore, points: Math.max(0, -balance), isFaceUp: balance < 0 || base.blackTeamScore.isFaceUp },
+  };
+}
+
+// Case 13: Standard MADE while opp (BLACK) leads by 3 — red gains +1, black drops to 2.
+cases.push({
+  name: 'Standard made while BLACK leads by 3: red +1, black drops 3 → 2',
+  fn: () => {
+    let state = createInitialState('p1');
+    // Skip the deal/transition plumbing: directly set a numeric bid + balance.
+    state = {
+      ...state,
+      biddingState: {
+        ...state.biddingState,
+        currentHighestBid: { amount: 150, kind: 'STANDARD', playerId: 'p2', displayName: 'Beat', timestamp: Date.now() },
+      },
+    };
+    state = stateWithBalance(state, -3); // BLACK leads by 3
+    // red makes standard bid → +1 toward RED → balance -3 → -2
+    const result = applyRoundScoring(state, 'RED', 200 /* actual > bid → met */);
+    assertEq('balanceShift', result.balanceShift, 1);
+    assertEq('redMatch delta (stays 0)', result.redTeamMatchPointsChange, 0);
+    assertEq('blackMatch delta (drops 3→2)', result.blackTeamMatchPointsChange, -1);
+    assertEq('metBid', result.metBid, true);
+  },
+});
+
+// Case 14: Standard FAILED while bidding team (RED) leads by 5 — opp +2 → balance +3.
+cases.push({
+  name: 'Standard failed while RED leads by 5: balance 5→1, black stays 0',
+  fn: () => {
+    let state = createInitialState('p1');
+    state = {
+      ...state,
+      biddingState: {
+        ...state.biddingState,
+        currentHighestBid: { amount: 200, kind: 'STANDARD', playerId: 'p2', displayName: 'John', timestamp: Date.now() },
+      },
+    };
+    state = stateWithBalance(state, 5);
+    // red misses John bid (200) → opp gains +4 (high-value)
+    const result = applyRoundScoring(state, 'RED', 50 /* actual < bid → failed */);
+    assertEq('balanceShift', result.balanceShift, -4);
+    assertEq('redMatch delta (drops 5→1)', result.redTeamMatchPointsChange, -4);
+    assertEq('blackMatch delta (stays 0)', result.blackTeamMatchPointsChange, 0);
+    assertEq('metBid', result.metBid, false);
+  },
+});
+
+// Case 15: Thanni MADE while opp leads by 3 — red +4 → balance -3 → +1 (red now leads by 1).
+cases.push({
+  name: 'Thanni made while BLACK leads by 3: red +4 → red leads by 1',
+  fn: () => {
+    let state = createInitialState('p1');
+    state = {
+      ...state,
+      biddingState: {
+        ...state.biddingState,
+        currentHighestBid: { amount: 0, kind: 'THANNI', playerId: 'p2', displayName: 'Thanni', timestamp: Date.now() },
+      },
+      thanniBidderId: 'p2',
+    };
+    state = stateWithBalance(state, -3);
+    const players = new Map(state.players);
+    players.set('p2', { ...players.get('p2')!, tricksWonThisRound: 4 });
+    state = { ...state, players };
+    const result = applyRoundScoring(state, 'RED', 0);
+    assertEq('balanceShift', result.balanceShift, THANNI_WIN_POINTS);
+    // balance -3 → +1 → red derived 0→1 (change +1), black derived 3→0 (change -3)
+    assertEq('redMatch delta (0→1)', result.redTeamMatchPointsChange, 1);
+    assertEq('blackMatch delta (3→0)', result.blackTeamMatchPointsChange, -3);
+    assertEq('metBid', result.metBid, true);
+  },
+});
+
+// Case 16: Thanni FAILED while bidding team leads by 5 — opp +8 → balance +5 → -3.
+cases.push({
+  name: 'Thanni failed while RED leads by 5: balance +5 → -3, black +3',
+  fn: () => {
+    let state = createInitialState('p1');
+    state = {
+      ...state,
+      biddingState: {
+        ...state.biddingState,
+        currentHighestBid: { amount: 0, kind: 'THANNI', playerId: 'p2', displayName: 'Thanni', timestamp: Date.now() },
+      },
+      thanniBidderId: 'p2',
+    };
+    state = stateWithBalance(state, 5);
+    const players = new Map(state.players);
+    players.set('p2', { ...players.get('p2')!, tricksWonThisRound: 2 });
+    state = { ...state, players };
+    const result = applyRoundScoring(state, 'RED', 0);
+    assertEq('balanceShift', result.balanceShift, -THANNI_FAIL_PENALTY);
+    // balance +5 → -3 → red derived 5→0 (change -5), black derived 0→3 (change +3)
+    assertEq('redMatch delta (5→0)', result.redTeamMatchPointsChange, -5);
+    assertEq('blackMatch delta (0→3)', result.blackTeamMatchPointsChange, 3);
+    assertEq('metBid', result.metBid, false);
+  },
+});
+
+// Case 17: Tied at 0, Thanni failed by RED → balance 0 → -8.
+cases.push({
+  name: 'Thanni failed from a 0-0 tie: balance 0 → -8 (black +8)',
+  fn: () => {
+    let state = createInitialState('p1');
+    state = {
+      ...state,
+      biddingState: {
+        ...state.biddingState,
+        currentHighestBid: { amount: 0, kind: 'THANNI', playerId: 'p2', displayName: 'Thanni', timestamp: Date.now() },
+      },
+      thanniBidderId: 'p2',
+    };
+    state = stateWithBalance(state, 0);
+    const players = new Map(state.players);
+    players.set('p2', { ...players.get('p2')!, tricksWonThisRound: 1 });
+    state = { ...state, players };
+    const result = applyRoundScoring(state, 'RED', 0);
+    assertEq('balanceShift', result.balanceShift, -THANNI_FAIL_PENALTY);
+    assertEq('redMatch delta', result.redTeamMatchPointsChange, 0);
+    assertEq('blackMatch delta', result.blackTeamMatchPointsChange, THANNI_FAIL_PENALTY);
+  },
+});
+
+// Case 18: Match-over via reaching +12 balance (RED wins).
+cases.push({
+  name: 'Match-over: balance +11 → RED makes standard bid → +12 (RED wins)',
+  fn: () => {
+    let state = createInitialState('p1');
+    state = {
+      ...state,
+      biddingState: {
+        ...state.biddingState,
+        currentHighestBid: { amount: 150, kind: 'STANDARD', playerId: 'p2', displayName: 'Beat', timestamp: Date.now() },
+      },
+    };
+    state = stateWithBalance(state, 11);
+    const result = applyRoundScoring(state, 'RED', 200);
+    assertEq('balanceShift', result.balanceShift, 1);
+    assertEq('matchOver', result.matchOver, true);
+    assertEq('winner', result.winner, 'RED');
+  },
+});
+
+// Case 19: Match-over at -12 (BLACK wins).
+cases.push({
+  name: 'Match-over: balance -11 → BLACK makes standard bid → -12 (BLACK wins)',
+  fn: () => {
+    let state = createInitialState('p1');
+    state = {
+      ...state,
+      biddingState: {
+        ...state.biddingState,
+        currentHighestBid: { amount: 150, kind: 'STANDARD', playerId: 'p1', displayName: 'Beat', timestamp: Date.now() },
+      },
+    };
+    state = stateWithBalance(state, -11);
+    const result = applyRoundScoring(state, 'BLACK', 200);
+    assertEq('balanceShift (BLACK gain)', result.balanceShift, -1);
+    assertEq('matchOver', result.matchOver, true);
+    assertEq('winner', result.winner, 'BLACK');
   },
 });
 
