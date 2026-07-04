@@ -160,6 +160,49 @@ export function aiShouldBidThanni(hand: Card[]): boolean {
   return false;
 }
 
+/**
+ * Heuristic: should an AI player call Hath Band after the phase-2 deal?
+ *
+ * Hath Band requires winning all 6 tricks with no trump and a folded partner —
+ * a high-risk, high-reward solo call. The caller plays the full 6-card hand
+ * (phase-1 4 + phase-2 2) solo against the two opponents. The heuristic is
+ * more demanding than Thanni's: the AI must hold top cards across MOST suits
+ * AND have the depth to survive a 6-trick sweep attempt.
+ *
+ * Like Thanni, the caller must additionally clear the `isHathBandGuaranteedSweep`
+ * gate — a guaranteed-sweep hand is disallowed by the rules (at least 1% risk
+ * required), so the heuristic here only motivates the *appetite* for the gamble;
+ * the sweep check enforces that the gamble is real.
+ */
+export function aiShouldCallHathBand(hand: Card[]): boolean {
+  if (hand.length !== 6) return false;
+
+  let jCount = 0;
+  let nineCount = 0;
+  let aCount = 0;
+  let tenCount = 0;
+  const suits = new Set<Suit>();
+  for (const c of hand) {
+    suits.add(c.suit);
+    if (c.value === 'J') jCount++;
+    else if (c.value === '9') nineCount++;
+    else if (c.value === 'A') aCount++;
+    else if (c.value === '10') tenCount++;
+  }
+
+  // Top-tier Hath Band candidate: at least 3 Jacks across 3+ distinct suits
+  // AND at least one secondary top card (9/A/10) for depth. The sweep check
+  // filters out true guaranteed-sweep cases — these are merely "AI is willing
+  // to gamble" hands.
+  if (jCount >= 3 && suits.size >= 3 && (nineCount + aCount + tenCount) >= 1) return true;
+  // 2 Jacks + 2 Nines across 4+ suits is also a strong Hath Band start.
+  if (jCount >= 2 && nineCount >= 2 && suits.size >= 4) return true;
+  // 4 Jacks (any distribution) is dominant enough to gamble on a solo 6-trick run.
+  if (jCount >= 4) return true;
+
+  return false;
+}
+
 // ============================================================================
 // SECTION 2: GAMEPLAY AI — Trick-winning card selection
 // ============================================================================

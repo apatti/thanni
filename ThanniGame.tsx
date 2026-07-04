@@ -13,16 +13,18 @@ import {
   MATCH_GOAL,
   getNextPlayerClockwise,
   isGuaranteedSweep,
+  isHathBandGuaranteedSweep,
   THANNI_BID_AMOUNT, THANNI_WIN_POINTS, THANNI_FAIL_PENALTY,
+  HATH_BAND_BID_AMOUNT, HATH_BAND_WIN_POINTS, HATH_BAND_FAIL_PENALTY, HATH_BAND_TRICK_COUNT,
 } from './thanniEngine';
-import { evaluateHand, aiPickCard, computeNextDealer, aiShouldBidThanni } from './thanniAI';
+import { evaluateHand, aiPickCard, computeNextDealer, aiShouldBidThanni, aiShouldCallHathBand } from './thanniAI';
 import { Markdown } from './src/Markdown';
 import rulesMarkdown from './RULES.md?raw';
 
 // ─── Types ────────────────────────────────────────────────────────────
 type GameStatus =
   | 'LOBBY' | 'BIDDING_PHASE1' | 'BIDDING_PHASE2'
-  | 'TRUMP_SET' | 'PLAYING' | 'TRUMP_REVEALED' | 'THANNI_PLAYING'
+  | 'TRUMP_SET' | 'PLAYING' | 'TRUMP_REVEALED' | 'THANNI_PLAYING' | 'HATH_BAND_PLAYING'
   | 'ROUND_SCORED' | 'MATCH_OVER';
 
 type Team = 'RED' | 'BLACK';
@@ -265,13 +267,16 @@ function RulesModal({ onClose }: { onClose: () => void }): ReactNode {
 }
 
 // ─── Thanni Result Modal (shown when a Thanni round ends) ─────────────
-// Rendered when a Thanni round ends. The human face and AI face express
-// opposite emotions depending on whether the user's team made or missed
-// the bid. The "Next Hand" button triggers the regular post-round flow.
-function ThanniResultModal({ outcome, tricksTaken, totalTricks, onNext, isMatchOver }: {
+// Rendered when a Thanni or Hath Band (solo) round ends. The human face and
+// AI face express opposite emotions depending on whether the user's team made
+// or missed the bid. The "Next Hand" button triggers the regular post-round flow.
+function SoloBidResultModal({ bidName, outcome, tricksTaken, totalTricks, winPoints, failPenalty, onNext, isMatchOver }: {
+  bidName: 'Thanni' | 'Hath Band';
   outcome: 'WON' | 'LOST';
   tricksTaken: number;
   totalTricks: number;
+  winPoints: number;
+  failPenalty: number;
   onNext: () => void;
   isMatchOver: boolean;
 }): ReactNode {
@@ -281,8 +286,11 @@ function ThanniResultModal({ outcome, tricksTaken, totalTricks, onNext, isMatchO
     : 'bg-gradient-to-br from-red-950 to-rose-900 border-red-500/60';
   const titleColor = won ? 'text-emerald-300' : 'text-red-300';
   const subtitle = won
-    ? `You swept all ${totalTricks} tricks solo — Thanni made! Bidding team gains +${THANNI_WIN_POINTS} match points.`
-    : `Bidder took only ${tricksTaken}/${totalTricks} tricks — Thanni missed. Opposition gains +${THANNI_FAIL_PENALTY} match points.`;
+    ? `You swept all ${totalTricks} tricks solo — ${bidName} made! Bidding team gains +${winPoints} match points.`
+    : `Caller took only ${tricksTaken}/${totalTricks} tricks — ${bidName} missed. Opposition gains +${failPenalty} match points.`;
+  const title = won
+    ? `YOU WON ${bidName.toUpperCase()}!`
+    : `YOU HAVE LOST THE ${bidName.toUpperCase()}`;
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/85 backdrop-blur-sm p-4">
       <div className={`rounded-2xl shadow-2xl border-2 max-w-md w-full p-6 text-center ${containerClasses}`}>
@@ -306,7 +314,7 @@ function ThanniResultModal({ outcome, tricksTaken, totalTricks, onNext, isMatchO
           </div>
         </div>
         <h2 className={`text-2xl sm:text-3xl font-black mb-2 ${titleColor}`}>
-          {won ? 'YOU WON THANNI!' : 'YOU HAVE LOST THE THANNI'}
+          {title}
         </h2>
         <p className="text-sm text-gray-300 mb-5 leading-relaxed">{subtitle}</p>
         <button onClick={onNext}
@@ -527,6 +535,16 @@ export default function ThanniGame(): ReactNode {
   // Set in scoreRound when a Thanni round ends; cleared on the next deal.
   const [thanniOutcome, setThanniOutcome] = useState<'WON' | 'LOST' | null>(null);
 
+  // Hath Band call (post-bid solo all-tricks call). Any player may call after
+  // phase-2 deal + trump set, before the first card is played. Partner is
+  // folded; caller plays solo 1-vs-2; trump discarded.
+  const [hathBandEligible, setHathBandEligible] = useState(false);
+  const hathBandEligibleRef = useRef(false);
+  const [isHathBandRound, setIsHathBandRound] = useState(false);
+  const [hathBandCallerId, setHathBandCallerId] = useState<string | null>(null);
+  const [hathBandPartnerId, setHathBandPartnerId] = useState<string | null>(null);
+  const [hathBandOutcome, setHathBandOutcome] = useState<'WON' | 'LOST' | null>(null);
+
   // Trump
   const [trump, setTrump] = useState<Suit | null>(null);
   const [trumpCard, setTrumpCard] = useState<Card | null>(null);
@@ -660,7 +678,7 @@ const blackPts = Math.max(0, -balance);
     setBidWinner(null); setBidLog([]); setBidActions({});
     setThanniEligible({ p0: true, p1: true, p2: true, p3: true });
     thanniEligibleRef.current = { p0: true, p1: true, p2: true, p3: true };
-    setIsThanniRound(false); setThanniPartnerId(null); setThanniOutcome(null);
+    setIsThanniRound(false); setThanniPartnerId(null); setThanniOutcome(null); setHathBandEligible(false); hathBandEligibleRef.current = false; setIsHathBandRound(false); setHathBandCallerId(null); setHathBandPartnerId(null); setHathBandOutcome(null);
     setTrump(null); setTrumpCard(null); setTrumpDown(true); setTrumpOpen(false);
     setShowPick(false); setTrumpRevealedBy(null);
     setTrickNum(0); setTurnPlayer(null); setPile([]); setResults([]);
@@ -688,7 +706,7 @@ const blackPts = Math.max(0, -balance);
     setPasses(0); passesRef.current = 0; setBidLog([]); setBidActions({});
     setThanniEligible({ p0: true, p1: true, p2: true, p3: true });
     thanniEligibleRef.current = { p0: true, p1: true, p2: true, p3: true };
-    setIsThanniRound(false); setThanniPartnerId(null); setThanniOutcome(null);
+    setIsThanniRound(false); setThanniPartnerId(null); setThanniOutcome(null); setHathBandEligible(false); hathBandEligibleRef.current = false; setIsHathBandRound(false); setHathBandCallerId(null); setHathBandPartnerId(null); setHathBandOutcome(null);
     setTrump(null); setTrumpCard(null); setTrumpDown(true); setTrumpOpen(false); setShowPick(false); setTrumpRevealedBy(null);
     setTrickNum(0); setTurnPlayer(null); setPile([]); setResults([]); setRoundMsg(null);
     voidCheckRef.current = false; setShowVoidModal(false); setVoidReason('');
@@ -832,12 +850,18 @@ const blackPts = Math.max(0, -balance);
     }
   }, [status, bidWinner, showPick, pName]);
 
-  // TRUMP_SET → deal remaining 2 cards → PLAYING
+  // TRUMP_SET → deal remaining 2 cards → open the Hath Band eligibility gate.
+  // The status stays at TRUMP_SET until EITHER someone calls Hath Band OR the
+  // human dismisses the gate ("Start Play") — at which point we transition to
+  // PLAYING with the lead at left-of-dealer. The void-round check runs here too.
   useEffect(() => {
     if (status !== 'TRUMP_SET') return;
     deal2();
+    // Open the Hath Band eligibility gate; the AI/human effect handles dismissal.
+    setHathBandEligible(true);
+    hathBandEligibleRef.current = true;
+    // Void round check: opposition has no trump cards → show modal & redeal.
     const t = setTimeout(() => {
-      // Void round: opposition has no trump cards → show modal & redeal
       if (voidCheckRef.current) {
         const bidTeam = (bidWinner === 'p0' || bidWinner === 'p2') ? 'RED' : 'BLACK';
         const oppTeam = bidTeam === 'RED' ? 'BLACK' : 'RED';
@@ -845,16 +869,90 @@ const blackPts = Math.max(0, -balance);
         const oppNames = oppIds.map(id => pName(id)).join(' & ');
         setVoidReason(`The opposition (${oppNames} — ${oppTeam}) has no ${SUIT_SYMBOLS[trump!]} trump cards. The round is void and must be redealt.`);
         setShowVoidModal(true);
+        setHathBandEligible(false);
+        hathBandEligibleRef.current = false;
         setMsg('Round voided — opposition has no trump suit. Redealing...');
         return;
       }
-      setStatus('PLAYING');
-      const ld = getNextPlayerClockwise(dealerId);
-      setTrickNum(1); setTurnPlayer(ld);
-      setMsg(`Trick 1. ${pName(ld)} leads.`);
     }, 2000);
     return () => clearTimeout(t);
   }, [status, dealerId, deal2, pName, bidWinner, trump]);
+
+  // Dismiss the Hath Band gate WITHOUT calling Hath Band — closes the
+  // eligibility window and transitions to normal PLAYING with the lead at
+  // left-of-dealer. Triggered by the human's "Start Play" button OR automatically
+  // after a short timeout if no one (human or AI) calls Hath Band.
+  const dismissHathBandGate = useCallback(() => {
+    if (!hathBandEligibleRef.current) return;
+    setHathBandEligible(false);
+    hathBandEligibleRef.current = false;
+    setStatus('PLAYING');
+    const ld = getNextPlayerClockwise(dealerId);
+    setTrickNum(1); setTurnPlayer(ld);
+    setMsg(`Trick 1. ${pName(ld)} leads.`);
+  }, [dealerId, pName]);
+
+  // Call Hath Band: any player may invoke this. Partner folded; trump discarded
+  // (its physical card returns to the bid winner's hand); caller leads trick 1;
+  // status transitions to HATH_BAND_PLAYING. The eligibility window closes for everyone.
+  const doHathBandCall = useCallback((pid: string) => {
+    setHathBandEligible(false);
+    hathBandEligibleRef.current = false;
+    setIsHathBandRound(true);
+    setHathBandCallerId(pid);
+    const partnerId = players.find(p => p.id === pid)?.partnerId ?? null;
+    setHathBandPartnerId(partnerId);
+    // Always return the set-aside trump card to the bid winner's hand (per rules
+    // — regardless of whether the bid winner ends up folded under Hath Band).
+    if (trumpCard && bidWinner) {
+      setPlayers(prev => prev.map(p => p.id === bidWinner
+        ? { ...p, hand: sortCards([...p.hand, trumpCard]) }
+        : p));
+    }
+    // Void trump.
+    setTrump(null); setTrumpCard(null); setTrumpDown(false); setTrumpOpen(false);
+    setCurBid({ amount: HATH_BAND_BID_AMOUNT, kind: 'HATH_BAND', playerId: pid, displayName: 'Hath Band', timestamp: Date.now() });
+    curBidRef.current = { amount: HATH_BAND_BID_AMOUNT, kind: 'HATH_BAND', playerId: pid, displayName: 'Hath Band', timestamp: Date.now() };
+    setBidActions(prev => ({ ...prev, [pid]: 'HATH_BAND' }));
+    setTrickNum(1); setTurnPlayer(pid); setPile([]); setResults([]);
+    setStatus('HATH_BAND_PLAYING');
+    setMsg(`${pName(pid)} calls Hath Band! Win all 6 tricks solo for +${HATH_BAND_WIN_POINTS} or miss for a swing of ${HATH_BAND_FAIL_PENALTY}.`);
+    setBidLog(prev => [...prev, `${pName(pid)} calls Hath Band! Solo 6-trick run, no trump, partner folded.`]);
+  }, [players, trumpCard, bidWinner, pName]);
+
+  // Live hands map for the Hath Band sweep check (memoized by card contents).
+  const liveHandsMap = useMemo(() => {
+    const m = new Map<string, Card[]>();
+    for (const p of players) m.set(p.id, p.hand);
+    return m;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [players.map(p => p.id + ':' + p.hand.map(c => c.id).slice().sort().join(',')).join('|')]);
+
+  // AI Hath Band calling effect — runs only while the eligibility gate is open.
+  // Human-priority: wait ~1.2s before any AI evaluates so the human can act first.
+  useEffect(() => {
+    if (!hathBandEligible || isHathBandRound || isThanniRound) return;
+    if (voidCheckRef.current) return; // round being voided — no Hath Band
+    const t = setTimeout(() => {
+      for (const cand of ['p0', 'p1', 'p3']) { // AIs only; PID = human
+        const hand = gh(cand);
+        if (hand.length !== 6) continue;
+        if (aiShouldCallHathBand(hand) && !isHathBandGuaranteedSweep(cand, liveHandsMap)) {
+          doHathBandCall(cand);
+          return;
+        }
+      }
+    }, 1200);
+    return () => clearTimeout(t);
+  }, [hathBandEligible, isHathBandRound, isThanniRound, gh, liveHandsMap, doHathBandCall]);
+
+  // Auto-dismiss the gate after ~5s of inactivity so the round proceeds naturally
+  // even if no one calls Hath Band and the human doesn't click "Start Play".
+  useEffect(() => {
+    if (!hathBandEligible || isHathBandRound || isThanniRound) return;
+    const t = setTimeout(() => dismissHathBandGate(), 5000);
+    return () => clearTimeout(t);
+  }, [hathBandEligible, isHathBandRound, isThanniRound, dismissHathBandGate]);
 
   const pickTrump = useCallback((card: Card) => {
     setTrump(card.suit); setTrumpCard(card); setTrumpDown(true); setShowPick(false); setStatus('TRUMP_SET');
@@ -891,11 +989,18 @@ const blackPts = Math.max(0, -balance);
     if (!cf) return;
     let rp = 0, bp = 0;
     const isThanni = cf.kind === 'THANNI';
-    let bidderTricksWon = 0;
+    const isHathBand = cf.kind === 'HATH_BAND';
+    // In a solo round the "caller" is the Thanni bidder or the Hath Band caller
+    // (not necessarily the bid winner — Hath Band can be called by anyone).
+    const soloCallerId =
+      isThanni ? bidWinner :
+      isHathBand ? hathBandCallerId :
+      bidWinner;
+    let callerTricksWon = 0;
     for (const t of res) {
       const tot = t.playedCards.reduce((s, x) => s + x.card.pointValue, 0);
       gp(t.winnerPlayerId).team === 'RED' ? (rp += tot) : (bp += tot);
-      if (t.winnerPlayerId === bidWinner) bidderTricksWon++;
+      if (soloCallerId && t.winnerPlayerId === soloCallerId) callerTricksWon++;
     }
     const bt = gp(bidWinner).team;
     const btp = bt === 'RED' ? rp : bp;
@@ -903,13 +1008,23 @@ const blackPts = Math.max(0, -balance);
     let gainTeam: Team;
     let gainAmount: number;
     let resultLabel: string;
-    let thanniMade = false;
+    let soloMade = false;
+    let soloCallerTeam: Team | null = null;
     if (isThanni) {
       const targetTricks = isThanniRound ? 4 : 6;
-      thanniMade = bidderTricksWon >= targetTricks;
-      gainTeam = thanniMade ? bt : (bt === 'RED' ? 'BLACK' : 'RED');
-      gainAmount = thanniMade ? THANNI_WIN_POINTS : THANNI_FAIL_PENALTY;
-      resultLabel = `${bt} ${thanniMade ? 'made' : 'missed'} Thanni — bidder took ${bidderTricksWon}/${targetTricks} tricks.`;
+      soloMade = callerTricksWon >= targetTricks;
+      gainTeam = soloMade ? bt : (bt === 'RED' ? 'BLACK' : 'RED');
+      gainAmount = soloMade ? THANNI_WIN_POINTS : THANNI_FAIL_PENALTY;
+      soloCallerTeam = bt;
+      resultLabel = `${bt} ${soloMade ? 'made' : 'missed'} Thanni — bidder took ${callerTricksWon}/${targetTricks} tricks.`;
+    } else if (isHathBand && soloCallerId) {
+      const callerTeam = gp(soloCallerId).team;
+      soloCallerTeam = callerTeam;
+      const target = HATH_BAND_TRICK_COUNT;
+      soloMade = callerTricksWon >= target;
+      gainTeam = soloMade ? callerTeam : (callerTeam === 'RED' ? 'BLACK' : 'RED');
+      gainAmount = soloMade ? HATH_BAND_WIN_POINTS : HATH_BAND_FAIL_PENALTY;
+      resultLabel = `${callerTeam} ${soloMade ? 'made' : 'missed'} Hath Band — caller took ${callerTricksWon}/${target} tricks.`;
     } else {
       const met = btp >= cf.amount;
       const hv = cf.amount >= 200;
@@ -926,11 +1041,15 @@ const blackPts = Math.max(0, -balance);
     if (nrp > 0) setRedFaceUp(true);
     if (nbp > 0) setBlackFaceUp(true);
 
-    // For a Thanni round, capture the user's perspective (WON / LOST) so the
-    // result modal can render with the appropriate happy/sad faces.
-    if (isThanni) {
-      const userWon = (bt === 'RED') === thanniMade; // RED is the user's team (PID = 'p2').
-      setThanniOutcome(userWon ? 'WON' : 'LOST');
+    // For a solo round (Thanni or Hath Band), capture the user's perspective
+    // (WON / LOST) so the result modal can render with happy/sad faces.
+    // PID is on RED; the user's team "won the solo" iff the solo caller's team
+    // is RED AND the solo succeeded, OR the solo caller's team is BLACK AND the
+    // solo failed (opposition caller missing the call benefits RED).
+    if ((isThanni || isHathBand) && soloCallerTeam) {
+      const userWon = (soloCallerTeam === 'RED') === soloMade;
+      if (isThanni) setThanniOutcome(userWon ? 'WON' : 'LOST');
+      else setHathBandOutcome(userWon ? 'WON' : 'LOST');
     }
 
     const rm = `${resultLabel} Red ${rp}pts, Black ${bp}pts. Match: Red ${nrp}, Black ${nbp}.`;
@@ -942,11 +1061,19 @@ const blackPts = Math.max(0, -balance);
       setStatus('ROUND_SCORED');
       setDealerId(computeNextDealer(dealerId, nrp, nbp, players));
     }
-  }, [bidWinner, curBid, isThanniRound, gp, balance, dealerId, players, pName]);
+  }, [bidWinner, curBid, isThanniRound, hathBandCallerId, gp, balance, dealerId, players, pName]);
 
   // ─── PLAY A CARD ───
-  // Trick size: 4 normally, 3 in a Thanni round (partner folded).
-  // Round length: 6 tricks normally, 4 in a Thanni round (only phase-1 cards are played).
+  // Trick size: 4 in a normal round, 3 in a solo round (Thanni / Hath Band — partner folded).
+  // Round length: 6 tricks normally, 4 in a Thanni round (phase-1 cards only), 6 in Hath Band (full hand).
+  const isSoloRound = isThanniRound || isHathBandRound;
+  const soloCallerId: string | null =
+    isThanniRound ? (bidWinner ?? null) :
+    isHathBandRound ? hathBandCallerId :
+    null;
+  const soloTargetTricks = isThanniRound ? 4 : isHathBandRound ? HATH_BAND_TRICK_COUNT : 6;
+  const foldedPartnerId = isThanniRound ? thanniPartnerId : isHathBandRound ? hathBandPartnerId : null;
+
   const playCard = useCallback((pid: string, card: Card) => {
     setHand(pid, gh(pid).filter(c => c.id !== card.id));
     const pc: PlayedCard = { card, playerId: pid, trickNumber: trickNum, positionInTrick: pile.length + 1 };
@@ -955,9 +1082,9 @@ const blackPts = Math.max(0, -balance);
     if (pid !== PID) setMsg(`${pName(pid)} plays ${card.value}${SUIT_SYMBOLS[card.suit]}`);
 
     // Use fresh closure values for trick size / count (avoid stale state inside setTimeout).
-    const sz = isThanniRound ? 3 : 4;
-    const totalTricks = isThanniRound ? 4 : 6;
-    const foldedPartner = isThanniRound ? thanniPartnerId : null;
+    const sz = isSoloRound ? 3 : 4;
+    const totalTricks = soloTargetTricks;
+    const foldedPartner = foldedPartnerId;
     const skipNext = (id: string): string => {
       let n = getNextPlayerClockwise(id);
       if (foldedPartner && n === foldedPartner) n = getNextPlayerClockwise(n);
@@ -966,19 +1093,20 @@ const blackPts = Math.max(0, -balance);
 
     if (np.length === sz) {
       setTimeout(() => {
-        const res = evaluateTrickWithContext(np, (isThanniRound ? false : trumpOpen) ? trump : null);
+        // Solo rounds have no trump; standard rounds honor the reveal state.
+        const res = evaluateTrickWithContext(np, (isSoloRound ? false : trumpOpen) ? trump : null);
         const tot = np.reduce((s, x) => s + x.card.pointValue, 0);
         addStats(res.winnerPlayerId, 1, tot);
         const nr = [...results, res];
         setResults(nr);
         setMsg(`${pName(res.winnerPlayerId)} wins trick ${trickNum} (+${tot}pts)!`);
-        // Thanni early-termination: the bidder must win every trick. If they lose
+        // Solo early-termination: the caller must win every trick. If they lose
         // even one, the round ends immediately — skip the "next trick" continuation
         // and jump straight to scoring with the partial trick history.
-        const bidderLostTrick = isThanniRound && bidWinner !== null && res.winnerPlayerId !== bidWinner;
+        const callerLostTrick = isSoloRound && soloCallerId !== null && res.winnerPlayerId !== soloCallerId;
         setTimeout(() => {
           setPile([]);
-          if (!bidderLostTrick && trickNum < totalTricks) {
+          if (!callerLostTrick && trickNum < totalTricks) {
             setTrickNum(n => n + 1);
             setTurnPlayer(res.winnerPlayerId);
             setMsg(`Trick ${trickNum + 1}. ${pName(res.winnerPlayerId)} leads.`);
@@ -992,18 +1120,18 @@ const blackPts = Math.max(0, -balance);
       setTurnPlayer(next);
       if (next === PID) setMsg('Your turn — play a card.');
     }
-  }, [setHand, gh, trickNum, pile, trump, trumpOpen, results, addStats, scoreRound, pName, isThanniRound, thanniPartnerId, bidWinner]);
+  }, [setHand, gh, trickNum, pile, trump, trumpOpen, results, addStats, scoreRound, pName, isSoloRound, soloTargetTricks, foldedPartnerId, soloCallerId]);
 
   const userPlay = useCallback((card: Card) => {
-    if (turnPlayer !== PID || (status !== 'PLAYING' && status !== 'TRUMP_REVEALED' && status !== 'THANNI_PLAYING')) return;
+    if (turnPlayer !== PID || (status !== 'PLAYING' && status !== 'TRUMP_REVEALED' && status !== 'THANNI_PLAYING' && status !== 'HATH_BAND_PLAYING')) return;
     const legal = legalFor(PID);
     if (!legal.some(c => c.id === card.id)) { setMsg('Cannot play that card — follow suit!'); return; }
     playCard(PID, card);
   }, [turnPlayer, status, legalFor, playCard]);
 
-  // AI trump-reveal effect — no-op during a Thanni round (no trump at all)
+  // AI trump-reveal effect — no-op during any solo round (no trump at all).
   useEffect(() => {
-    if (isThanniRound) return;
+    if (isSoloRound) return;
     if (status !== 'PLAYING' || trumpOpen || !trump || pile.length === 0) return;
     if (!turnPlayer || turnPlayer === PID) return;
     const hand = gh(turnPlayer);
@@ -1012,14 +1140,15 @@ const blackPts = Math.max(0, -balance);
     if (canFollow) return;
     const t = setTimeout(() => doRevealTrump(turnPlayer), 500 + Math.random() * 400);
     return () => clearTimeout(t);
-  }, [status, turnPlayer, pile.length, trumpOpen, trump, gh, pile, doRevealTrump, isThanniRound]);
+  }, [status, turnPlayer, pile.length, trumpOpen, trump, gh, pile, doRevealTrump, isSoloRound]);
 
-  // AI trick play — also runs in THANNI_PLAYING. Skips the folded partner.
+  // AI trick play — also runs in THANNI_PLAYING and HATH_BAND_PLAYING.
+  // Skips the folded partner in solo rounds.
   useEffect(() => {
-    if (status !== 'PLAYING' && status !== 'TRUMP_REVEALED' && status !== 'THANNI_PLAYING') return;
+    if (status !== 'PLAYING' && status !== 'TRUMP_REVEALED' && status !== 'THANNI_PLAYING' && status !== 'HATH_BAND_PLAYING') return;
     if (!turnPlayer || turnPlayer === PID) return;
-    if (isThanniRound && turnPlayer === thanniPartnerId) return; // folded
-    const sz = isThanniRound ? 3 : 4;
+    if (isSoloRound && turnPlayer === foldedPartnerId) return; // folded
+    const sz = isSoloRound ? 3 : 4;
     if (pile.length >= sz) return;
     const t = setTimeout(() => {
       const hand = gh(turnPlayer);
@@ -1027,15 +1156,15 @@ const blackPts = Math.max(0, -balance);
       const legal = legalFor(turnPlayer);
       if (!legal.length) return;
       const me = gp(turnPlayer);
-      // In a Thanni round there is no trump and the partner is folded — opponents
+      // In a solo round there is no trump and the partner is folded — opponents
       // just play to win. aiPickCard with no trump handles this natively.
-      const pick = aiPickCard(legal, pile, turnPlayer, me.partnerId, isThanniRound ? false : trumpOpen, isThanniRound ? null : trump);
+      const pick = aiPickCard(legal, pile, turnPlayer, me.partnerId, isSoloRound ? false : trumpOpen, isSoloRound ? null : trump);
       playCard(turnPlayer, pick);
     }, 600 + Math.random() * 800);
     return () => clearTimeout(t);
-  }, [status, turnPlayer, pile.length, gh, legalFor, playCard, trump, trumpOpen, gp, isThanniRound, thanniPartnerId]);
+  }, [status, turnPlayer, pile.length, gh, legalFor, playCard, trump, trumpOpen, gp, isSoloRound, foldedPartnerId]);
 
-  const isInteractiveStatus = status === 'PLAYING' || status === 'TRUMP_REVEALED' || status === 'THANNI_PLAYING';
+  const isInteractiveStatus = status === 'PLAYING' || status === 'TRUMP_REVEALED' || status === 'THANNI_PLAYING' || status === 'HATH_BAND_PLAYING';
   const legalIds = isInteractiveStatus && isMy
     ? new Set(legalFor(PID).map(c => c.id)) : undefined;
 
@@ -1087,7 +1216,7 @@ const blackPts = Math.max(0, -balance);
         <div className="flex items-center justify-center gap-2 mt-1 text-xs sm:text-sm text-gray-300 flex-wrap">
           <span>Status: <strong className="text-yellow-300">{status}</strong></span>
           {trump && !trumpDown && <span className="text-red-400 font-bold">Trump: {SUIT_SYMBOLS[trump]}</span>}
-          <span>Trick: {trickNum}/{isThanniRound ? 4 : 6}{isThanniRound ? ' · THANNI' : ''}</span>
+          <span>Trick: {trickNum}/{isThanniRound ? 4 : 6}{isThanniRound ? ' · THANNI' : isHathBandRound ? ' · HATH BAND' : ''}</span>
           <span>Dealer: {pName(dealerId)}</span>
         </div>
       </div>
@@ -1142,27 +1271,75 @@ const blackPts = Math.max(0, -balance);
           {/* Center */}
           <div className="flex flex-col items-center justify-center flex-1 w-full max-w-sm sm:max-w-md">
             {/* Winning Bid info (during play + scoring) */}
-            {curBid && bidWinner && (status === 'PLAYING' || status === 'TRUMP_REVEALED' || status === 'THANNI_PLAYING' || status === 'ROUND_SCORED') && (() => {
+            {curBid && bidWinner && (status === 'PLAYING' || status === 'TRUMP_REVEALED' || status === 'THANNI_PLAYING' || status === 'HATH_BAND_PLAYING' || status === 'ROUND_SCORED') && (() => {
               const bidTeam = gp(bidWinner).team;
               const partnerName = pName(gp(bidWinner).partnerId);
               const isThanniBid = curBid.kind === 'THANNI';
+              const isHathBandBid = curBid.kind === 'HATH_BAND';
+              const isSoloBid = isThanniBid || isHathBandBid;
+              // For Hath Band, the solo caller may differ from the bid winner;
+              // the banner shows the caller's name and team.
+              const soloCaller = isHathBandBid ? hathBandCallerId : bidWinner;
+              const soloTeam = soloCaller ? gp(soloCaller).team : bidTeam;
+              const soloPartner = soloCaller ? pName(gp(soloCaller).partnerId) : partnerName;
               return (
-                <div className={`mb-3 px-3 py-1.5 rounded-lg text-center w-full max-w-xs ${isThanniBid ? 'bg-purple-900/70 border border-purple-400/60' : 'bg-gray-900/60 border border-yellow-500/40'}`}>
-                  <div className="text-xs text-gray-400">{isThanniBid ? 'Thanni Bid' : 'Winning Bid'}</div>
-                  <div className={`text-sm font-bold ${isThanniBid ? 'text-purple-200' : bidTeam === 'RED' ? 'text-red-400' : 'text-gray-200'}`}>
+                <div className={`mb-3 px-3 py-1.5 rounded-lg text-center w-full max-w-xs ${isSoloBid ? (isThanniBid ? 'bg-purple-900/70 border border-purple-400/60' : 'bg-amber-900/70 border border-amber-400/60') : 'bg-gray-900/60 border border-yellow-500/40'}`}>
+                  <div className="text-xs text-gray-400">{isThanniBid ? 'Thanni Bid' : isHathBandBid ? 'Hath Band Call' : 'Winning Bid'}</div>
+                  <div className={`text-sm font-bold ${isHathBandBid ? 'text-amber-200' : isThanniBid ? 'text-purple-200' : bidTeam === 'RED' ? 'text-red-400' : 'text-gray-200'}`}>
                     {isThanniBid
-                      ? `Thanni — ${bidTeam === 'RED' ? '♥ RED' : '♠ BLACK'} (No Trump)`
+                      ? `Thanni — ${soloTeam === 'RED' ? '♥ RED' : '♠ BLACK'} (No Trump)`
+                      : isHathBandBid
+                      ? `Hath Band — ${soloTeam === 'RED' ? '♥ RED' : '♠ BLACK'} (No Trump)`
                       : `${getBidDisplayName(curBid.amount)} (${curBid.amount}) — ${bidTeam === 'RED' ? '♥ RED' : '♠ BLACK'}`}
                   </div>
                   <div className="text-xs text-gray-400">
-                    by {pName(bidWinner)} {isThanniBid ? `(solo)` : `& ${partnerName}`}
+                    {isSoloBid
+                      ? `by ${soloCaller ? pName(soloCaller) : '?'} (solo)`
+                      : `by ${pName(bidWinner)} & ${partnerName}`}
                   </div>
                   {isThanniBid && (
                     <div className="text-[10px] sm:text-xs text-purple-300 mt-1">
-                      Win all 4 tricks: <span className="text-green-300">+{THANNI_WIN_POINTS}</span> · Miss: <span className="text-red-300">−{THANNI_FAIL_PENALTY} (opp +{THANNI_FAIL_PENALTY})</span>
-                      <br /> {partnerName} folded — solo 1 vs 2
+                      Win all 4 tricks: <span className="text-green-300">+{THANNI_WIN_POINTS}</span> · Miss: <span className="text-red-300">opp +{THANNI_FAIL_PENALTY}</span>
+                      <br /> {soloPartner} folded — solo 1 vs 2
                     </div>
                   )}
+                  {isHathBandBid && (
+                    <div className="text-[10px] sm:text-xs text-amber-300 mt-1">
+                      Win all 6 tricks: <span className="text-green-300">+{HATH_BAND_WIN_POINTS}</span> · Miss: <span className="text-red-300">opp +{HATH_BAND_FAIL_PENALTY}</span>
+                      <br /> Trump discarded · {soloPartner} folded — solo 1 vs 2
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
+            {/* Hath Band eligibility prompt — between phase-2 deal + trump set
+                and the first card play. Any player may call. Gated by the
+                per-card sweep check (sweep-guaranteed hands are disallowed). */}
+            {status === 'TRUMP_SET' && hathBandEligible && !isThanniRound && !isHathBandRound && (() => {
+              const mySweepGuaranteed = isHathBandGuaranteedSweep(PID, liveHandsMap);
+              return (
+                <div className="mb-3 px-3 py-2 rounded-lg text-center w-full max-w-sm bg-gradient-to-r from-amber-900/80 to-yellow-900/80 border border-amber-400/60">
+                  <div className="text-xs font-bold text-amber-300 tracking-wider mb-1">HATH BAND?</div>
+                  <div className="text-[11px] sm:text-xs text-gray-200 mb-2">
+                    Solo all-tricks call. Caller's partner is folded; no trump; win all 6 tricks for <span className="text-green-300 font-bold">+{HATH_BAND_WIN_POINTS}</span> or miss for a <span className="text-red-300 font-bold">+{HATH_BAND_FAIL_PENALTY}</span> swing toward opp.
+                  </div>
+                  <div className="flex justify-center gap-2">
+                    <button
+                      disabled={mySweepGuaranteed}
+                      onClick={() => !mySweepGuaranteed && doHathBandCall(PID)}
+                      title={mySweepGuaranteed ? 'Your hand guarantees a sweep — Hath Band requires at least 1% risk' : 'Call Hath Band — solo all 6 tricks, no trump, partner folded'}
+                      className={`px-3 py-1.5 rounded-lg font-bold text-xs sm:text-sm transition-all active:scale-95 ${mySweepGuaranteed ? 'bg-gray-700 text-gray-500 cursor-not-allowed' : 'bg-amber-600 hover:bg-amber-500 text-white shadow-lg cursor-pointer'}`}
+                    >
+                      {mySweepGuaranteed ? 'Blocked — Sweep Guaranteed' : `★ Call Hath Band`}
+                    </button>
+                    <button
+                      onClick={() => dismissHathBandGate()}
+                      className="px-3 py-1.5 rounded-lg font-bold text-xs sm:text-sm bg-gray-700 hover:bg-gray-600 text-gray-200 transition-all active:scale-95"
+                    >
+                      Start Play
+                    </button>
+                  </div>
                 </div>
               );
             })()}
@@ -1278,7 +1455,7 @@ const blackPts = Math.max(0, -balance);
           })()}
 
           <div className="flex flex-wrap justify-center gap-2 mt-2 w-full max-w-md">
-            {status === 'ROUND_SCORED' && !thanniOutcome && (
+            {status === "ROUND_SCORED" && !thanniOutcome && !hathBandOutcome && (
               <button onClick={() => deal()}
                 className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold rounded-lg shadow transition-all active:scale-95">
                 Next Hand
@@ -1308,7 +1485,7 @@ const blackPts = Math.max(0, -balance);
 
       {/* Footer */}
       <div className="w-full max-w-2xl mx-auto py-3 flex justify-center gap-3 flex-wrap border-t border-gray-700 mt-4 pt-3">
-        {status === 'ROUND_SCORED' && !thanniOutcome && (
+        {status === "ROUND_SCORED" && !thanniOutcome && !hathBandOutcome && (
           <button onClick={() => deal()}
             className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold rounded-lg shadow transition-all active:scale-95">
             Next Hand
@@ -1426,16 +1603,23 @@ const blackPts = Math.max(0, -balance);
         );
       })()}
 
-      {/* Thanni Result Modal — shown after a Thanni round ends (and the match
-          hasn't ended). Renders with happy/sad human + AI faces based on the
-          user's perspective (PID is RED, so RED's success = user's success). */}
-      {status === 'ROUND_SCORED' && thanniOutcome && (() => {
-        const tricksTaken = bidWinner ? gp(bidWinner).tricksWon : 0;
+      {/* Solo Bid (Thanni / Hath Band) Result Modal — shown after a solo round ends.
+          Renders with happy/sad human + AI faces based on the user's perspective
+          (PID is RED, so RED's success = user's success). */}
+      {status === 'ROUND_SCORED' && (thanniOutcome || hathBandOutcome) && (() => {
+        const isThanni = !!thanniOutcome;
+        const outcome = isThanni ? thanniOutcome! : hathBandOutcome!;
+        const callerId = isThanni ? bidWinner : hathBandCallerId;
+        const tricksTaken = callerId ? gp(callerId).tricksWon : 0;
+        const totalTricks = isThanni ? 4 : HATH_BAND_TRICK_COUNT;
         return (
-          <ThanniResultModal
-            outcome={thanniOutcome}
+          <SoloBidResultModal
+            bidName={isThanni ? 'Thanni' : 'Hath Band'}
+            outcome={outcome}
             tricksTaken={tricksTaken}
-            totalTricks={isThanniRound ? 4 : 6}
+            totalTricks={totalTricks}
+            winPoints={isThanni ? THANNI_WIN_POINTS : HATH_BAND_WIN_POINTS}
+            failPenalty={isThanni ? THANNI_FAIL_PENALTY : HATH_BAND_FAIL_PENALTY}
             onNext={() => deal()}
             isMatchOver={false}
           />

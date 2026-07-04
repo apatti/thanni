@@ -38,6 +38,18 @@
 - **Miss** (lose any trick): the opposition gains **+8 match points** — a swing of 8 against the bidding team (the +8 first negates any positive balance the bidding team held, then overflows into the opposition's side).
 - Thanni is *disallowed* if the bidder's 4 cards **guarantee** a sweep against every possible opponent deal — the bid must carry genuine risk (at least 1%).
 
+## Hath Band (the post-bid solo all-tricks call)
+
+- After bidding completes, all 6 cards are dealt, and the trump is chosen — but **before the first card is played** — any player may call **Hath Band**.
+- The caller's **partner is folded** and does not play. The caller plays solo 1-vs-2 against the two opponents and must **win all 6 tricks** (losing any trick ends the round immediately).
+- The caller **leads every trick** (since they must win each one).
+- When Hath Band is called, the chosen **trump is discarded** entirely — the round is played with **no trump**, and the physical trump card the bid winner set aside is returned to the bid winner's hand (regardless of whether the bid winner ends up folded, e.g. if the bid winner's partner called).
+- **Any player can call Hath Band** — including a member of the opposition (a "stolen contract"). If the opposition caller misses, the original bid winner's team gains the differential swing.
+- The original bid winner's bid contract is **fully overridden** by a Hath Band call — no secondary scoring event for the original bid is computed.
+- **Make** (win all 6 tricks): the caller's team gains **+6 match points**.
+- **Miss** (lose any trick): the opposition gains **+12 match points** — a swing of 12 against the caller's team.
+- Hath Band is *disallowed* if the caller's 6 cards **guarantee** a sweep — i.e., every one of the caller's 6 cards has no possible beater (no opponent holds a same-suit card with a higher point value). The call must carry genuine risk (at least 1%).
+
 ## Trick Play
 
 - You **must follow the led suit** if you have a card of that suit.
@@ -67,6 +79,9 @@ The match uses a single signed **balance**: positive means **RED** leads by that
 - **Thanni bid:**
   - Team **makes** (win all 4 tricks): balance shifts +4 toward the bidding team.
   - Team **misses**: balance shifts 8 toward the opposition.
+- **Hath Band call:**
+  - Caller **makes** (win all 6 tricks): balance shifts +6 toward the caller's team.
+  - Caller **misses** (loses any trick): balance shifts 12 toward the opposition.
 - First team to push the balance to **+12** (RED) or **−12** (BLACK) wins the match.
 
 ## Scoreboard

@@ -89,6 +89,16 @@ export const THANNI_FAIL_PENALTY = 8;
 /** Cards each player holds during the bidding phase (phase-1 deal). */
 export const PHASE1_HAND_SIZE = 4;
 
+// ---- Hath Band call (the post-bid solo all-tricks call) ----
+/** Match points won by the caller's team when a Hath Band call succeeds. */
+export const HATH_BAND_WIN_POINTS = 6;
+/** Differential swing toward the opposition when a Hath Band call fails. */
+export const HATH_BAND_FAIL_PENALTY = 12;
+/** Sentinel amount for a Hath Band bid (rankless; doesn't compete with numeric bids). */
+export const HATH_BAND_BID_AMOUNT = 0;
+/** Round length in a Hath Band call (caller must win all 6 tricks). */
+export const HATH_BAND_TRICK_COUNT = 6;
+
 // ---- Player & IDs ----
 
 export type PlayerId = string; // e.g., "p0", "p1"
@@ -110,8 +120,8 @@ export interface Card {
   id: string; // e.g., "AH", "KS", "QD", "JC", "10H", "9S"
 }
 
-/** Bid kind discriminator. STANDARD = numeric 150–328 bid; THANNI = the special all-tricks bid. */
-export type BidKind = 'STANDARD' | 'THANNI';
+/** Bid kind discriminator. STANDARD = numeric 150–328 bid; THANNI = mid-bid solo all-tricks bid; HATH_BAND = post-bid solo all-tricks call. */
+export type BidKind = 'STANDARD' | 'THANNI' | 'HATH_BAND';
 
 /**
  * The player who won the bid and chooses trump.
@@ -191,6 +201,7 @@ export type GameStatus =
   | 'PLAYING'
   | 'TRUMP_REVEALED'
   | 'THANNI_PLAYING'
+  | 'HATH_BAND_PLAYING'
   | 'ROUND_SCORED'
   | 'MATCH_OVER';
 
@@ -222,6 +233,13 @@ export interface GameState {
   thanniBidderId: PlayerId | null;
   /** Folded partner of the Thanni bidder (null outside a Thanni round). */
   thanniPartnerId: PlayerId | null;
+
+  /** True when the current round is a Hath Band call (partner folded, no trump, caller must win all 6). */
+  isHathBandRound: boolean;
+  /** Player who called Hath Band this round (null outside a Hath Band round). */
+  hathBandCallerId: PlayerId | null;
+  /** Folded partner of the Hath Band caller (null outside a Hath Band round). */
+  hathBandPartnerId: PlayerId | null;
 
   /** Trump suit for the current round (null = hidden/not yet chosen). */
   trumpSuit: Suit | null;
@@ -933,6 +951,46 @@ function mulberry32(seed: number): () => number {
   };
 }
 
+/**
+ * Hath Band sweep pre-check (information-set aware, no minimax):
+ *
+ * For each of the caller's 6 cards, check whether ANY of the other 3 players'
+ * (actual) hands has a card of the same suit with a higher point value. If at
+ * least one such beater exists for at least one of the caller's cards → the
+ * caller faces genuine risk → Hath Band is ALLOWED. Only when ALL 6 of the
+ * caller's cards have no potential beater across the other 3 hands (i.e.,
+ * every caller's card would beat any opp card of its suit) → guaranteed sweep
+ * → Hath Band is DISALLOWED (per the rule: at least 1% risk required).
+ *
+ * Per-card sufficiency is a SUBSET of the true playdown minimax: if a hand
+ * passes the per-card test as "guaranteed", it sweeps under all plausible
+ * standing-on-defense playdowns too. So the test is conservative — it never
+ * disallows a hand that actually carries risk, only ever disallows the truly
+ * unbeatable ones.
+ *
+ * O(6 × 3 × 6) = ~108 lookups per call — trivially fast (~microseconds).
+ */
+export function isHathBandGuaranteedSweep(
+  callerId: PlayerId,
+  allHands: Map<PlayerId, Card[]>,
+): boolean {
+  const callerHand = allHands.get(callerId);
+  if (!callerHand || callerHand.length === 0) return false;
+
+  for (const card of callerHand) {
+    let hasBeater = false;
+    for (const [pid, oppHand] of allHands) {
+      if (pid === callerId) continue;
+      if (oppHand.some(c => c.suit === card.suit && c.pointValue > card.pointValue)) {
+        hasBeater = true;
+        break;
+      }
+    }
+    if (hasBeater) return false; // a caller's card has a potential beater → real risk → allow
+  }
+  return true; // every caller's card is unbeatable across opponents → disallow
+}
+
 // ============================================================================
 // SECTION 6: TRICK EVALUATOR — Determine trick winner
 // ============================================================================
@@ -1257,6 +1315,27 @@ export function applyRoundScoring(
     );
   }
 
+  // Hath Band scoring: caller must win ALL 6 tricks. +6 met (caller's team);
+  // opposition +12 on fail (swing of 12 toward the opposition). The caller's
+  // team may differ from `biddingTeam` — Hath Band can be called by ANY
+  // player, including the opposition ("stolen contract").
+  if (bid.kind === 'HATH_BAND') {
+    const callerId = gameState.hathBandCallerId ?? bid.playerId;
+    const caller = gameState.players.get(callerId);
+    const callerTeam = caller != null ? caller.team : biddingTeam;
+    const callerWonAll6 = caller != null && caller.tricksWonThisRound === HATH_BAND_TRICK_COUNT;
+    return computeRoundScoringResult(
+      gameState,
+      callerTeam,
+      bidAmount,
+      callerWonAll6,
+      HATH_BAND_WIN_POINTS,
+      HATH_BAND_FAIL_PENALTY, // opposition gains +12 (swing of 12 toward opp)
+      0,
+      false,
+    );
+  }
+
   // Standard bid path.
   const metBid = biddingTeamActualPoints >= bidAmount;
   const isHighValueBid = bidAmount >= 200;
@@ -1379,6 +1458,9 @@ export function createInitialState(
     isThanniRound: false,
     thanniBidderId: null,
     thanniPartnerId: null,
+    isHathBandRound: false,
+    hathBandCallerId: null,
+    hathBandPartnerId: null,
     trumpSuit: null,
     trumpFaceDown: true,
     trumpRevealedThisRound: false,
@@ -1539,6 +1621,56 @@ export function transitionToThanniPlaying(gameState: GameState): GameState {
 }
 
 /**
+ * Transition: TRUMP_SET → HATH_BAND_PLAYING.
+ *
+ * Caller may be ANY of the 4 players (per the rules). The caller's partner
+ * is folded (does not play). The trump chosen during phase-2 is discarded
+ * and its physical card returns to the bid winner's hand — regardless of
+ * whether the bid winner ends up folded (e.g., bid winner's partner calls).
+ *
+ * `trumpCardForWinner` is the physical trump card the bid winner set aside
+ * during trump selection; it is returned to their hand on transition. Pass
+ * `null` if no card was set aside (unusual edge case).
+ */
+export function transitionToHathBandPlaying(
+  gameState: GameState,
+  callerId: PlayerId,
+  trumpCardForWinner: Card | null,
+): GameState {
+  const caller = gameState.players.get(callerId)!;
+  const partnerId = caller.partnerId;
+  const bidWinnerId = gameState.bidWinnerId;
+
+  // Return the trump card to the bid winner's hand.
+  const players = new Map(gameState.players);
+  if (trumpCardForWinner && bidWinnerId) {
+    const winner = players.get(bidWinnerId)!;
+    players.set(bidWinnerId, {
+      ...winner,
+      hand: winner.hand.includes(trumpCardForWinner)
+        ? winner.hand
+        : [...winner.hand, trumpCardForWinner],
+    });
+  }
+
+  return {
+    ...gameState,
+    status: 'HATH_BAND_PLAYING',
+    players,
+    isHathBandRound: true,
+    hathBandCallerId: callerId,
+    hathBandPartnerId: partnerId,
+    trumpSuit: null,
+    trumpFaceDown: false,
+    trumpRevealedThisRound: false,
+    currentTrickNumber: 1,
+    currentLeadPlayerId: callerId, // Hath Band caller leads every trick
+    trickPile: [],
+    lastSavedAt: Date.now(),
+  };
+}
+
+/**
  * Transition: PLAYING → ROUND_SCORED (after 6 tricks)
  * Evaluate scores, apply match-point updates.
  */
@@ -1606,6 +1738,9 @@ export function transitionToNewRound(gameState: GameState): GameState {
     isThanniRound: false,
     thanniBidderId: null,
     thanniPartnerId: null,
+    isHathBandRound: false,
+    hathBandCallerId: null,
+    hathBandPartnerId: null,
     trumpSuit: null,
     trumpFaceDown: true,
     trumpRevealedThisRound: false,
@@ -2048,6 +2183,7 @@ export {
   calculateBidFromEstimate,
   aiDecideBidOrPass,
   aiShouldBidThanni,
+  aiShouldCallHathBand,
   winningOfPile,
   aiPickCard,
   computeNextDealer,

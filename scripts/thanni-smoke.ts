@@ -14,14 +14,20 @@ import {
   createInitialState,
   transitionToBiddingPhase1,
   transitionToThanniPlaying,
+  transitionToHathBandPlaying,
+  isHathBandGuaranteedSweep,
   applyRoundScoring,
   evaluateTrickWithContext,
   determineTrickWinner,
   THANNI_WIN_POINTS,
   THANNI_FAIL_PENALTY,
+  HATH_BAND_WIN_POINTS,
+  HATH_BAND_FAIL_PENALTY,
+  HATH_BAND_TRICK_COUNT,
   type Card,
   type GameState,
   type PlayedCard,
+  type PlayerId,
 } from '../thanniEngine';
 
 type Case = { name: string; fn: () => void };
@@ -463,6 +469,186 @@ cases.push({
     state = stateWithBalance(state, -11);
     const result = applyRoundScoring(state, 'BLACK', 200);
     assertEq('balanceShift (BLACK gain)', result.balanceShift, -1);
+    assertEq('matchOver', result.matchOver, true);
+    assertEq('winner', result.winner, 'BLACK');
+  },
+});
+
+// ─── Hath Band scenarios ────────────────────────────────────────────────
+
+// Helper: build a GameState that simulates a Hath Band round being called.
+// `callerId` calls; the trump card is returned to the bid winner's hand; the
+// caller's partner is folded; balance starts at 0.
+function buildHathBandState(
+  callerId: PlayerId,
+  callerTricksWon: number,
+  baseBalance = 0,
+  trumpCard: Card | null = null,
+): GameState {
+  let state: GameState = createInitialState('p1');
+  // Synthesize a HATH_BAND bid + caller/player state for the scoring path.
+  state = {
+    ...state,
+    biddingState: {
+      ...state.biddingState,
+      currentHighestBid: { amount: 0, kind: 'HATH_BAND', playerId: callerId, displayName: 'Hath Band', timestamp: Date.now() },
+    },
+    bidWinnerId: callerId, // simplistic — for testing scoring only.
+    balance: baseBalance,
+    redTeamScore: { ...state.redTeamScore, points: Math.max(0, baseBalance), isFaceUp: baseBalance > 0 || state.redTeamScore.isFaceUp },
+    blackTeamScore: { ...state.blackTeamScore, points: Math.max(0, -baseBalance), isFaceUp: baseBalance < 0 || state.blackTeamScore.isFaceUp },
+  };
+  // Run the transition: returns trump card to bid winner, voids trump, etc.
+  state = transitionToHathBandPlaying(state, callerId, trumpCard);
+  // Set the caller's tricksWonThisRound to simulate a Hath Band play outcome.
+  const players = new Map(state.players);
+  players.set(callerId, { ...players.get(callerId)!, tricksWonThisRound: callerTricksWon });
+  state = { ...state, players };
+  return state;
+}
+
+// Case 20: Made Hath Band by RED → balance shifts +6.
+cases.push({
+  name: 'Made Hath Band by RED: balance shifts +6 toward RED',
+  fn: () => {
+    const state = buildHathBandState('p2', HATH_BAND_TRICK_COUNT, 0);
+    const result = applyRoundScoring(state, 'RED', 0);
+    assertEq('balanceShift (RED gain)', result.balanceShift, HATH_BAND_WIN_POINTS);
+    assertEq('redMatch delta', result.redTeamMatchPointsChange, HATH_BAND_WIN_POINTS);
+    assertEq('blackMatch delta', result.blackTeamMatchPointsChange, 0);
+    assertEq('metBid', result.metBid, true);
+  },
+});
+
+// Case 21: Failed Hath Band by RED → swing of 12 toward BLACK.
+cases.push({
+  name: 'Failed Hath Band by RED: balance shifts -12 (BLACK +12, RED stays 0)',
+  fn: () => {
+    const state = buildHathBandState('p2', 2, 0); // RED took only 2/6 tricks
+    const result = applyRoundScoring(state, 'RED', 0);
+    assertEq('balanceShift (BLACK gain)', result.balanceShift, -HATH_BAND_FAIL_PENALTY);
+    assertEq('redMatch delta', result.redTeamMatchPointsChange, 0);
+    assertEq('blackMatch delta', result.blackTeamMatchPointsChange, HATH_BAND_FAIL_PENALTY);
+    assertEq('metBid', result.metBid, false);
+  },
+});
+
+// Case 22: Made Hath Band by BLACK → swing of 6 toward BLACK (opposition steal).
+cases.push({
+  name: 'Made Hath Band by BLACK caller: balance shifts -6 (BLACK +6)',
+  fn: () => {
+    const state = buildHathBandState('p1', HATH_BAND_TRICK_COUNT, 0); // BLACK caller
+    const result = applyRoundScoring(state, 'RED', 0); // biddingTeam arg is unused for the HATH_BAND branch path
+    assertEq('balanceShift (BLACK gain)', result.balanceShift, -HATH_BAND_WIN_POINTS);
+    assertEq('redMatch delta', result.redTeamMatchPointsChange, 0);
+    assertEq('blackMatch delta', result.blackTeamMatchPointsChange, HATH_BAND_WIN_POINTS);
+    assertEq('metBid', result.metBid, true);
+  },
+});
+
+// Case 23: Failed Hath Band while RED leads by 5 → balance +5 → -7 (BLACK +7).
+cases.push({
+  name: 'Failed Hath Band while RED leads by 5: balance +5 → -7, BLACK +7',
+  fn: () => {
+    const state = buildHathBandState('p2', 3, 5); // RED took only 3/6 tricks
+    const result = applyRoundScoring(state, 'RED', 0);
+    assertEq('balanceShift', result.balanceShift, -HATH_BAND_FAIL_PENALTY);
+    // balance +5 → -7 → red derived 5→0 (change -5), black derived 0→7 (change +7)
+    assertEq('redMatch delta (5→0)', result.redTeamMatchPointsChange, -5);
+    assertEq('blackMatch delta (0→7)', result.blackTeamMatchPointsChange, 7);
+    assertEq('metBid', result.metBid, false);
+  },
+});
+
+// Case 24: Made Hath Band while BLACK leads by 3 (RED caller) → balance -3 → +3 (RED +3, BLACK drops 3).
+cases.push({
+  name: 'Made Hath Band while BLACK leads by 3: balance -3 → +3',
+  fn: () => {
+    const state = buildHathBandState('p2', HATH_BAND_TRICK_COUNT, -3);
+    const result = applyRoundScoring(state, 'RED', 0);
+    assertEq('balanceShift', result.balanceShift, HATH_BAND_WIN_POINTS);
+    // balance -3 → +3 → red derived 0→3 (change +3), black derived 3→0 (change -3)
+    assertEq('redMatch delta (0→3)', result.redTeamMatchPointsChange, 3);
+    assertEq('blackMatch delta (3→0)', result.blackTeamMatchPointsChange, -3);
+    assertEq('metBid', result.metBid, true);
+  },
+});
+
+// Case 25: Hath Band sweep pre-check — guaranteed → disallow.
+// Caller holds J, 9, A, K, 10, Q of ♥ (all 6 ♥, top-to-bottom by pointValue in
+// their suit). Opponents hold all 18 remaining cards of ♦/♠/♣ — none can follow
+// ♥, so caller's ♥ cards win every trick regardless of opp discards.
+cases.push({
+  name: 'Hath Band sweep check: 6 ♥ cards (J, 9, A, K, 10, Q) → guaranteed sweep → disallow',
+  fn: () => {
+    const deck = buildDeck();
+    const hearts = (['JH', '9H', 'AH', 'KH', '10H', 'QH'] as string[]).map(id => deck.find(c => c.id === id)!);
+    // Opponents and the folded partner hold all 18 non-♥ cards collectively.
+    const oppsHand = (['p0', 'p1', 'p3']).map((pid, i) =>
+      deck.filter(c => !hearts.some(h => h.id === c.id)).slice(i * 6, (i + 1) * 6)
+    );
+    const allHands = new Map<PlayerId, Card[]>([
+      ['p2', hearts],
+      ['p0', oppsHand[0]],
+      ['p1', oppsHand[1]],
+      ['p3', oppsHand[2]],
+    ]);
+    // No opp has any ♥ → no beater exists for any of the caller's ♥ cards →
+    // all 6 caller cards have no potential beater → guaranteed sweep.
+    assertEq('isHathBandGuaranteedSweep (6 hearts)', isHathBandGuaranteedSweep('p2', allHands), true);
+  },
+});
+
+// Case 26: Hath Band sweep pre-check — risk exists → allow.
+// Caller holds 6 cards across mixed suits, including a low Q♥ where an opp has J♥ → beater exists.
+cases.push({
+  name: 'Hath Band sweep check: Q♥ with an opp holding J♥ → risk exists → allow',
+  fn: () => {
+    const deck = buildDeck();
+    // Caller: Q♥, K♠, Q♠, A♦, 10♦, 9♣ (a weak, mixed hand).
+    const callerHand = (['QH', 'KS', 'QS', 'AD', '10D', '9C'] as string[]).map(id => deck.find(c => c.id === id)!);
+    // p1 holds J♥ (beater for caller's Q♥).
+    const p1Hand = (['JH', '9S', 'AS', 'KD', 'KD', 'JC'] as string[]).map(id => deck.find(c => c.id === id)!).filter(Boolean);
+    // Deduplicate to avoid collisions — re-pick from the deck.
+    const remaining = deck.filter(c => !callerHand.some(h => h.id === c.id));
+    const p1HandReal = remaining.filter(c => c.suit === 'HEARTS' && (c.value === 'J' || c.value === 'A' || c.value === 'K')).slice(0, 3);
+    const p1HandFiller = remaining.filter(c => !p1HandReal.includes(c)).slice(0, 6 - p1HandReal.length);
+    const p1Final = [...p1HandReal, ...p1HandFiller];
+    // Distribute the rest to p0 and p3.
+    const usedIds = new Set([...callerHand.map(c => c.id), ...p1Final.map(c => c.id)]);
+    const rest = deck.filter(c => !usedIds.has(c.id));
+    const p0Hand = rest.slice(0, 6);
+    const p3Hand = rest.slice(6, 12);
+    const allHands = new Map<PlayerId, Card[]>([
+      ['p2', callerHand],
+      ['p0', p0Hand],
+      ['p1', p1Final],
+      ['p3', p3Hand],
+    ]);
+    // Caller's Q♥ has a J♥ (pointValue 30 > 5) → beater exists → risk → allowed.
+    assertEq('isHathBandGuaranteedSweep (Q♥ vs J♥)', isHathBandGuaranteedSweep('p2', allHands), false);
+  },
+});
+
+// Case 27: Match-over via Hath Band make from +6 → +12 (RED wins).
+cases.push({
+  name: 'Match-over: balance +6 → RED makes Hath Band → +12 (RED wins)',
+  fn: () => {
+    const state = buildHathBandState('p2', HATH_BAND_TRICK_COUNT, 6);
+    const result = applyRoundScoring(state, 'RED', 0);
+    assertEq('balanceShift', result.balanceShift, HATH_BAND_WIN_POINTS);
+    assertEq('matchOver', result.matchOver, true);
+    assertEq('winner', result.winner, 'RED');
+  },
+});
+
+// Case 28: Match-over via Hath Band miss at -1 → -13 (BLACK wins).
+cases.push({
+  name: 'Match-over: balance -1 → RED misses Hath Band → -13 (BLACK wins)',
+  fn: () => {
+    const state = buildHathBandState('p2', 5, -1); // miss — took 5/6 tricks
+    const result = applyRoundScoring(state, 'RED', 0);
+    assertEq('balanceShift', result.balanceShift, -HATH_BAND_FAIL_PENALTY);
     assertEq('matchOver', result.matchOver, true);
     assertEq('winner', result.winner, 'BLACK');
   },
