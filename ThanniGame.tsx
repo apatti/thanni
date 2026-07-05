@@ -679,6 +679,7 @@ const blackPts = Math.max(0, -balance);
   }, []);
 
   const isMy = turnPlayer === PID;
+  const isBidding = status === 'BIDDING_PHASE1' || status === 'BIDDING_PHASE2';
   const myHand = gh(PID);
 
   // Sweep pre-check for the human's Thanni bid button — true when the human's
@@ -1593,7 +1594,7 @@ const blackPts = Math.max(0, -balance);
               );
             })()}
 
-            {/* Trump Zone — actual card face-down / face-up */}
+            {/* Trump Zone — actual card face-down / face-up; hidden on mobile during bidding */}
             {trump ? (
               trumpDown ? (
                 <div className="mb-4"><CardC faceDown /><div className="text-center mt-1"><span className="text-emerald-200 text-xs font-bold">TRUMP SET</span></div></div>
@@ -1601,7 +1602,7 @@ const blackPts = Math.max(0, -balance);
                 <div className="mb-4"><CardC card={trumpCard} highlighted /><div className="text-center mt-1"><span className="text-yellow-400 text-xs font-bold">TRUMP: {SUIT_SYMBOLS[trump]}</span></div></div>
               )
             ) : (
-              <div className="w-16 h-24 sm:w-20 sm:h-28 rounded-xl shadow-2xl mb-4 flex items-center justify-center bg-gradient-to-br from-emerald-700 to-teal-800 border-2 border-emerald-400">
+              <div className={`w-16 h-24 sm:w-20 sm:h-28 rounded-xl shadow-2xl mb-4 flex items-center justify-center bg-gradient-to-br from-emerald-700 to-teal-800 border-2 border-emerald-400 ${isBidding ? 'hidden sm:flex' : ''}`}>
                 <span className="text-gray-400 text-xs">NO TRUMP</span>
               </div>
             )}
@@ -1626,8 +1627,8 @@ const blackPts = Math.max(0, -balance);
               );
             })()}
 
-            {/* Trick pile */}
-            <div className="w-full h-32 sm:h-40 bg-black/20 rounded-xl border-2 border-dashed border-yellow-500/50 flex items-center justify-center relative mb-2 sm:mb-4">
+            {/* Trick pile — hidden on mobile during bidding to save vertical space */}
+            <div className={`w-full h-32 sm:h-40 bg-black/20 rounded-xl border-2 border-dashed border-yellow-500/50 flex items-center justify-center relative mb-2 sm:mb-4 ${isBidding ? 'hidden sm:flex' : ''}`}>
               {pile.length > 0 ? (
                 <div className="flex gap-1 sm:gap-2">
                   {pile.map((pc, i) => (
