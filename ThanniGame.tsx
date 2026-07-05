@@ -150,18 +150,18 @@ function ScoreBoard({ red, black }: { red: { points: number; isFaceUp: boolean }
     : 'from-yellow-900/30 to-gray-900/60 border-yellow-500/30';
 
   return (
-    <div className={`w-full max-w-md mx-auto px-3 sm:px-4 mb-3 bg-gradient-to-r ${bgGlow} rounded-xl border p-3 sm:p-4 shadow-lg transition-all duration-500`}>
+    <div className={`w-full max-w-md mx-auto px-2 sm:px-4 mb-2 sm:mb-3 bg-gradient-to-r ${bgGlow} rounded-xl border p-2 sm:p-4 shadow-lg transition-all duration-500`}>
       {/* Top row: team scores */}
-      <div className="flex justify-between items-center mb-2">
-        <div className="flex items-center gap-1.5">
-          <span className="text-red-400 text-lg">♥</span>
-          <span className={`font-bold text-lg sm:text-xl ${red.points > black.points ? 'text-red-400' : 'text-red-400/60'}`}>{red.points}</span>
-          <span className="text-xs text-gray-500">{red.isFaceUp ? '▲' : '▼'}</span>
+      <div className="flex justify-between items-center mb-1 sm:mb-2">
+        <div className="flex items-center gap-1">
+          <span className="text-red-400 text-base sm:text-lg">♥</span>
+          <span className={`font-bold text-base sm:text-xl ${red.points > black.points ? 'text-red-400' : 'text-red-400/60'}`}>{red.points}</span>
+          <span className="text-[10px] sm:text-xs text-gray-500">{red.isFaceUp ? '▲' : '▼'}</span>
         </div>
 
         <div className="flex flex-col items-center">
-          <span className="text-yellow-500 text-xs bg-yellow-900/50 px-2 py-0.5 rounded-full mb-1">Goal: {MATCH_GOAL}</span>
-          <span className={`text-2xl sm:text-3xl font-black ${scoreColor} transition-colors duration-500`}>
+          <span className="text-yellow-500 text-[10px] sm:text-xs bg-yellow-900/50 px-1.5 sm:px-2 py-0.5 rounded-full mb-0.5 sm:mb-1">Goal: {MATCH_GOAL}</span>
+          <span className={`text-xl sm:text-3xl font-black ${scoreColor} transition-colors duration-500`}>
             {red.points} — {black.points}
           </span>
           {leader !== 'TIED' && (
@@ -174,10 +174,10 @@ function ScoreBoard({ red, black }: { red: { points: number; isFaceUp: boolean }
           )}
         </div>
 
-        <div className="flex items-center gap-1.5">
-          <span className="text-xs text-gray-500">{black.isFaceUp ? '▲' : '▼'}</span>
-          <span className={`font-bold text-lg sm:text-xl ${black.points > red.points ? 'text-gray-200' : 'text-gray-200/60'}`}>{black.points}</span>
-          <span className="text-gray-300 text-lg">♠</span>
+        <div className="flex items-center gap-1">
+          <span className="text-[10px] sm:text-xs text-gray-500">{black.isFaceUp ? '▲' : '▼'}</span>
+          <span className={`font-bold text-base sm:text-xl ${black.points > red.points ? 'text-gray-200' : 'text-gray-200/60'}`}>{black.points}</span>
+          <span className="text-gray-300 text-base sm:text-lg">♠</span>
         </div>
       </div>
 
@@ -244,14 +244,16 @@ function BidPanel({ cur, my, est, thanniEligible, thanniBlocked, onBid, onThanni
         disabled={!canThanni}
         onClick={() => canThanni && onThanni()}
         title={thanniEligible && thanniBlocked ? 'Hand is a guaranteed sweep — Thanni requires at least 1% risk' : 'Bid Thanni — win all 4 tricks with no trump, partner folded. +4 / −8 (and opp +8)'}
-        className={`w-full py-2 px-3 mb-2 rounded-lg font-extrabold text-xs sm:text-sm transition-all duration-150 active:scale-95 flex items-center justify-center gap-2 ${canThanni ? 'bg-gradient-to-r from-purple-700 to-fuchsia-700 hover:from-purple-600 hover:to-fuchsia-600 text-white shadow-lg cursor-pointer' : 'bg-gray-700 text-gray-500 cursor-not-allowed'}`}>
-        <span className="text-yellow-300">★</span>
-        Thanni
+        className={`w-full py-2 px-3 mb-2 rounded-lg font-extrabold text-xs sm:text-sm transition-all duration-150 active:scale-95 flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-2 ${canThanni ? 'bg-gradient-to-r from-purple-700 to-fuchsia-700 hover:from-purple-600 hover:to-fuchsia-600 text-white shadow-lg cursor-pointer' : 'bg-gray-700 text-gray-500 cursor-not-allowed'}`}>
+        <span className="flex items-center gap-1">
+          <span className="text-yellow-300">★</span>
+          Thanni
+          <span className="text-green-300">+{THANNI_WIN_POINTS}</span>
+          <span className="text-red-300">/ −{THANNI_FAIL_PENALTY}</span>
+        </span>
         <span className="text-[10px] sm:text-xs opacity-90">(win all 4 tricks · no trump · partner folded)</span>
-        <span className="text-green-300">+{THANNI_WIN_POINTS}</span>
-        <span className="text-red-300">/ −{THANNI_FAIL_PENALTY}</span>
         {my && thanniEligible && thanniBlocked && (
-          <span className="text-[10px] text-yellow-400 ml-2">Sweep guaranteed — blocked</span>
+          <span className="text-[10px] text-yellow-400">Sweep guaranteed — blocked</span>
         )}
       </button>
       <div className="flex flex-wrap gap-1 sm:gap-2 mb-2">{std.slice(0, 3).map(btn)}</div>
@@ -278,7 +280,7 @@ function BidPanel({ cur, my, est, thanniEligible, thanniBlocked, onBid, onThanni
 function RulesModal({ onClose }: { onClose: () => void }): ReactNode {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" onClick={onClose}>
-      <div className="bg-gradient-to-br from-gray-800 to-gray-900 rounded-2xl shadow-2xl border-2 border-yellow-500/50 max-w-2xl w-full max-h-[85vh] overflow-y-auto p-5 sm:p-6" onClick={e => e.stopPropagation()}>
+      <div className="bg-gradient-to-br from-gray-800 to-gray-900 rounded-2xl shadow-2xl border-2 border-yellow-500/50 max-w-2xl w-full max-h-[85vh] overflow-y-auto overflow-x-hidden p-5 sm:p-6" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4 sticky top-0 bg-gradient-to-br from-gray-800 to-gray-900 -mx-5 sm:-mx-6 px-5 sm:px-6 pb-3 border-b border-gray-700 z-10">
           <h2 className="text-xl sm:text-2xl font-bold text-yellow-400">How to Play Thanni</h2>
           <button onClick={onClose} aria-label="Close"
@@ -1358,21 +1360,22 @@ const blackPts = Math.max(0, -balance);
     <div className="min-h-screen bg-gradient-to-b from-green-900 via-green-800 to-emerald-900 flex flex-col items-center p-1 sm:p-4 overflow-auto pb-4 sm:pb-8">
       {/* Header */}
       <div className="w-full max-w-4xl mx-auto mb-2">
-        <div className="flex items-center justify-between">
-          <h1 className="text-xl sm:text-2xl font-bold text-yellow-400 drop-shadow-lg">THANNI</h1>
-          <div className="flex items-center gap-3">
+        <div className="flex items-center justify-between gap-1">
+          <h1 className="text-xl sm:text-2xl font-bold text-yellow-400 drop-shadow-lg flex-shrink-0">THANNI</h1>
+          <div className="flex items-center gap-1 sm:gap-3 flex-wrap justify-end">
             <AIModeDropdown onChange={() => setAiModeVersion(v => v + 1)} />
             <button
               onClick={() => setDebug(!debugMode)}
               title="Toggle debug mode: reveal all hands + log every AI decision"
-              className={`text-xs sm:text-sm font-bold px-2 py-1 rounded-lg border transition-all ${debugMode ? 'bg-orange-600 border-orange-400 text-white' : 'bg-gray-800 border-gray-600 text-orange-300 hover:bg-gray-700'}`}>
-              🐛 Debug: {debugMode ? 'ON' : 'OFF'}
+              className={`text-xs sm:text-sm font-bold px-1.5 sm:px-2 py-1 rounded-lg border transition-all ${debugMode ? 'bg-orange-600 border-orange-400 text-white' : 'bg-gray-800 border-gray-600 text-orange-300 hover:bg-gray-700'}`}>
+              <span className="sm:hidden">🐛{debugMode ? '✓' : ''}</span>
+              <span className="hidden sm:inline">🐛 Debug: {debugMode ? 'ON' : 'OFF'}</span>
             </button>
             <button onClick={() => setShowRules(true)}
               className="text-xs sm:text-sm text-blue-300 hover:text-blue-200 underline">Rules</button>
           </div>
         </div>
-        <div className="flex items-center justify-center gap-2 mt-1 text-xs sm:text-sm text-gray-300 flex-wrap">
+        <div className="flex items-center justify-center gap-x-2 gap-y-0.5 mt-1 text-[11px] sm:text-sm text-gray-300 flex-wrap">
           <span>Status: <strong className="text-yellow-300">{status}</strong></span>
           {trump && !trumpDown && <span className="text-red-400 font-bold">Trump: {SUIT_SYMBOLS[trump]}</span>}
           <span>Trick: {trickNum}/{isThanniRound ? 4 : 6}{isThanniRound ? ' · THANNI' : isHathBandRound ? ' · HATH BAND' : ''}</span>
@@ -1382,7 +1385,7 @@ const blackPts = Math.max(0, -balance);
             if (isDefaultMode()) return null;
             const m = getAIMode();
             const tags = (['p0', 'p1', 'p3'] as string[]).filter(s => m[s] !== 'legacy').map(s => `${s}:${m[s]}`).join(' · ');
-            return <span className="text-[10px] sm:text-xs italic text-purple-300 ml-2">AI: {tags}</span>;
+            return <span className="text-[10px] sm:text-xs italic text-purple-300">AI: {tags}</span>;
           })()}
         </div>
       </div>
@@ -1581,7 +1584,7 @@ const blackPts = Math.max(0, -balance);
               {pile.length > 0 ? (
                 <div className="flex gap-1 sm:gap-2">
                   {pile.map((pc, i) => (
-                    <div key={`${pc.playerId}-${i}`} className={`transform ${i===0?'-translate-x-4 -rotate-12':i===1?'':i===2?'translate-x-4 rotate-12':'translate-y-4 rotate-6'}`}>
+                    <div key={`${pc.playerId}-${i}`} className={`transform ${i===0?'-translate-x-2 sm:-translate-x-4 -rotate-6 sm:-rotate-12':i===1?'':i===2?'translate-x-2 sm:translate-x-4 rotate-6 sm:rotate-12':'translate-y-2 sm:translate-y-4 rotate-3 sm:rotate-6'}`}>
                       <CardC card={pc.card} small />
                     </div>
                   ))}
@@ -1625,8 +1628,9 @@ const blackPts = Math.max(0, -balance);
           <div className="w-full flex flex-col items-center gap-2">
             <div className="flex items-center gap-2">
               <PlayerAvatar name={pName(PID)} team="RED" active={isMy || showPick} />
-              <span className={`text-xs sm:text-sm font-semibold whitespace-nowrap ${isMy || showPick ? 'text-yellow-400 animate-pulse' : 'text-gray-400'}`}>
-              {showPick ? `TAP A CARD — its suit becomes Trump (${myHand.length} cards)` : `YOUR HAND (${myHand.length} cards) ${isMy ? '— YOUR TURN' : ''}`}
+              <span className={`text-xs sm:text-sm font-semibold text-center ${isMy || showPick ? 'text-yellow-400 animate-pulse' : 'text-gray-400'}`}>
+              <span className="hidden sm:inline">{showPick ? `TAP A CARD — its suit becomes Trump (${myHand.length} cards)` : `YOUR HAND (${myHand.length} cards) ${isMy ? '— YOUR TURN' : ''}`}</span>
+              <span className="sm:hidden">{showPick ? `Tap a card for Trump (${myHand.length})` : `Your Hand (${myHand.length}) ${isMy ? '— YOUR TURN' : ''}`}</span>
             </span>
           </div>
           <HandR cards={myHand}
