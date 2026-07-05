@@ -918,7 +918,12 @@ const blackPts = Math.max(0, -balance);
       const cb = curBidRef.current;
       // Thanni: only on AI's first action this round AND only if not a guaranteed sweep (must carry real risk).
       // Always handled by the heuristic — strategies don't see Thanni decisions.
-      if (thanniEligibleRef.current[curBidder] && aiShouldBidThanni(hand) && !isGuaranteedSweep(hand)) {
+      // desperate = team is trailing AND opposition is at 10+ (close to winning at 12).
+      const bidderTeam = gp(curBidder).team;
+      const oppScore = bidderTeam === 'RED' ? Math.max(0, -balance) : Math.max(0, balance);
+      const myScore = bidderTeam === 'RED' ? Math.max(0, balance) : Math.max(0, -balance);
+      const desperate = oppScore >= 10 && myScore < oppScore;
+      if (thanniEligibleRef.current[curBidder] && aiShouldBidThanni(hand, desperate) && !isGuaranteedSweep(hand)) {
         doThanniBid(curBidder);
         return;
       }

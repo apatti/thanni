@@ -133,29 +133,41 @@ export function aiDecideBidOrPass(
  * The caller must additionally verify via `isGuaranteedSweep(hand)` that the
  * bid carries genuine risk (a guaranteed-sweep hand is disallowed by the rules).
  */
-export function aiShouldBidThanni(hand: Card[]): boolean {
+export function aiShouldBidThanni(hand: Card[], desperate = false): boolean {
   if (hand.length !== 4) return false;
 
-  // Count top cards: J (highest) and 9 (second-highest by point value) are the
-  // most sweep-relevant cards, since they win tricks outright in a no-trump round.
+  // Build per-suit breakdown of J/9/A for pattern matching.
+  const suitCards = new Map<Suit, { j: boolean; nine: boolean; a: boolean }>();
   let jCount = 0;
   let nineCount = 0;
   let aCount = 0;
-  const suits = new Set<Suit>();
   for (const c of hand) {
-    suits.add(c.suit);
-    if (c.value === 'J') jCount++;
-    else if (c.value === '9') nineCount++;
-    else if (c.value === 'A') aCount++;
+    if (!suitCards.has(c.suit)) suitCards.set(c.suit, { j: false, nine: false, a: false });
+    const sc = suitCards.get(c.suit)!;
+    if (c.value === 'J') { jCount++; sc.j = true; }
+    else if (c.value === '9') { nineCount++; sc.nine = true; }
+    else if (c.value === 'A') { aCount++; sc.a = true; }
   }
 
-  // Strong Thanni candidate: at least 2 Jacks across distinct suits, ideally
-  // backed by an A or 9. This is aggressive but matches the spirit of "I think
-  // I can take every trick if I lead well" — and the sweep pre-check filters
-  // out the true guaranteed-sweep cases (those are disallowed, not strategic).
-  if (jCount >= 2 && suits.size >= 2 && (nineCount >= 1 || aCount >= 1)) return true;
-  // Three Jacks in any distribution is a strong enough start to gamble.
+  // --- Strong patterns (always bid) ---
+  // Three Jacks in any distribution.
   if (jCount >= 3) return true;
+  // At least 2 Jacks across distinct suits, backed by a 9 or A.
+  if (jCount >= 2 && suitCards.size >= 2 && (nineCount >= 1 || aCount >= 1)) return true;
+
+  // --- Medium patterns (always bid) ---
+  const hasJ9A = [...suitCards.values()].some(s => s.j && s.nine && s.a);
+  const hasJ9 = [...suitCards.values()].some(s => s.j && s.nine);
+
+  // J,9,A (same suit) + 9 of another suit
+  if (hasJ9A && nineCount >= 2) return true;
+  // J,9 (same suit) + J (other suit) + 9 (other suit)
+  if (hasJ9 && jCount >= 2 && nineCount >= 2) return true;
+
+  // --- Desperate pattern (only when trailing and opposition close to 12) ---
+  // J,9,A (same suit) + A of another suit — risky but worth the gamble
+  // when the team is about to lose anyway.
+  if (desperate && hasJ9A && aCount >= 2) return true;
 
   return false;
 }
