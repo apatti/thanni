@@ -113,4 +113,4 @@ Every push to `main` triggers the GitHub Actions workflow which builds and deplo
 
 ## License
 
-Private project.
+This project is licensed under **[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)** — you're free to copy, share, and adapt it, but you must give credit to **Ashwin Patti**.
