@@ -246,13 +246,14 @@ function BidPanel({ cur, my, est, thanniEligible, thanniBlocked, onBid, onThanni
         onClick={() => canThanni && onThanni()}
         title={thanniEligible && thanniBlocked ? 'Hand is a guaranteed sweep — Thanni requires at least 1% risk' : 'Bid Thanni — win all 4 tricks with no trump, partner folded. +4 / −8 (and opp +8)'}
         className={`w-full py-2 px-3 mb-2 rounded-lg font-extrabold text-xs sm:text-sm transition-all duration-150 active:scale-95 flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-2 ${canThanni ? 'bg-gradient-to-r from-purple-700 to-fuchsia-700 hover:from-purple-600 hover:to-fuchsia-600 text-white shadow-lg cursor-pointer' : 'bg-gray-700 text-gray-500 cursor-not-allowed'}`}>
-        <span className="flex items-center gap-1">
+        <span className="flex items-center gap-1 whitespace-nowrap">
           <span className="text-yellow-300">★</span>
           Thanni
           <span className="text-green-300">+{THANNI_WIN_POINTS}</span>
           <span className="text-red-300">/ −{THANNI_FAIL_PENALTY}</span>
+          <span className="sm:hidden text-[10px] opacity-90">(solo · no trump)</span>
         </span>
-        <span className="text-[10px] sm:text-xs opacity-90">(win all 4 tricks · no trump · partner folded)</span>
+        <span className="hidden sm:inline text-xs opacity-90">(win all 4 tricks · no trump · partner folded)</span>
         {my && thanniEligible && thanniBlocked && (
           <span className="text-[10px] text-yellow-400">Sweep guaranteed — blocked</span>
         )}
