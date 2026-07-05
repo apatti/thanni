@@ -1036,6 +1036,8 @@ export function getLegalCards(
   trumpRevealed: boolean,
   playerId: PlayerId,
   revealingPlayerId: PlayerId | null,
+  bidWinnerId: PlayerId | null = null,
+  trumpCard: Card | null = null,
 ): Card[] {
   if (trickPile.length === 0) {
     // Leading: can play any card
@@ -1046,6 +1048,11 @@ export function getLegalCards(
   
   // Check if player must follow trump reveal rule
   if (trumpRevealed && trumpSuit !== null && playerId === revealingPlayerId) {
+    // Bid winner who reveals trump themselves must play THE specific trump card
+    if (playerId === bidWinnerId && trumpCard) {
+      const exact = hand.filter(c => c.suit === trumpCard.suit && c.value === trumpCard.value);
+      if (exact.length > 0) return exact;
+    }
     const trumpsInHand = hand.filter(c => c.suit === trumpSuit);
     if (trumpsInHand.length > 0) {
       return trumpsInHand; // MUST play a trump

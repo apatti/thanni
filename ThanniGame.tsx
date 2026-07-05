@@ -685,8 +685,8 @@ const blackPts = Math.max(0, -balance);
   }, [myHandKey]);
 
   const legalFor = useCallback((pid: string) =>
-    getLegalCards(gh(pid), pile, trump, trumpOpen, pid, trumpRevealedBy),
-    [gh, pile, trump, trumpOpen, trumpRevealedBy]);
+    getLegalCards(gh(pid), pile, trump, trumpOpen, pid, trumpRevealedBy, bidWinner, trumpCard),
+    [gh, pile, trump, trumpOpen, trumpRevealedBy, bidWinner, trumpCard]);
 
   // ─── AI Strategy View Builders ──────────────────────────────────────
   // Construct read-only snapshots of the game state for the pluggable AI
