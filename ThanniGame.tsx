@@ -25,6 +25,7 @@ import {
   type CardplayView, type BiddingView,
 } from './src/ai';
 import { AIModeDropdown } from './src/AIModeDropdown';
+import { initAudio, playSound, isMuted, toggleMute } from './src/sounds';
 
 // ─── Types ────────────────────────────────────────────────────────────
 type GameStatus =
@@ -533,6 +534,7 @@ export default function ThanniGame(): ReactNode {
   const [playerName, setPlayerNameState] = useState('');
   const playerNameRef = useRef('');
   const [showRules, setShowRules] = useState(false);
+  const [soundMuted, setSoundMuted] = useState(isMuted());
   const [cardPickPhase, setCardPickPhase] = useState<'IDLE' | 'PICKING' | 'REVEAL'>('IDLE');
   const [pickCards, setPickCards] = useState<Card[]>([]);
   const [pickedCard, setPickedCard] = useState<Card | null>(null);
@@ -732,6 +734,7 @@ const blackPts = Math.max(0, -balance);
   // ─── LOBBY / CARD-PICK HANDLERS ───
   const handleStartGame = useCallback(() => {
     if (!playerNameRef.current.trim()) return;
+    initAudio(); // must be called from a user gesture for iOS/Chrome autoplay policy
     // Build 4 face-down cards, one from each suit, shuffled
     const deck = shuffleDeck(buildDeck());
     const pc: Card[] = [];
@@ -1320,6 +1323,29 @@ const blackPts = Math.max(0, -balance);
   const legalIds = isInteractiveStatus && isMy
     ? new Set(legalFor(PID).map(c => c.id)) : undefined;
 
+  // ── Sound effects — play a chime when the human needs to act ──
+  useEffect(() => {
+    if (isInteractiveStatus && turnPlayer === PID) {
+      playSound('yourTurn');
+    }
+  }, [isInteractiveStatus, turnPlayer]);
+
+  useEffect(() => {
+    if (status === 'BIDDING_PHASE1' && curBidder === PID && !bidWinner) {
+      playSound('yourBid');
+    }
+  }, [status, curBidder, bidWinner]);
+
+  useEffect(() => {
+    if (showPick) playSound('pickTrump');
+  }, [showPick]);
+
+  useEffect(() => {
+    if (status === 'ROUND_SCORED' || status === 'MATCH_OVER') {
+      playSound('roundEnd');
+    }
+  }, [status]);
+
   const handleVoidRedeal = useCallback(() => {
     setShowVoidModal(false);
     setVoidReason('');
@@ -1370,6 +1396,12 @@ const blackPts = Math.max(0, -balance);
               className={`text-xs sm:text-sm font-bold px-1.5 sm:px-2 py-1 rounded-lg border transition-all ${debugMode ? 'bg-orange-600 border-orange-400 text-white' : 'bg-gray-800 border-gray-600 text-orange-300 hover:bg-gray-700'}`}>
               <span className="sm:hidden">🐛{debugMode ? '✓' : ''}</span>
               <span className="hidden sm:inline">🐛 Debug: {debugMode ? 'ON' : 'OFF'}</span>
+            </button>
+            <button
+              onClick={() => { toggleMute(); setSoundMuted(isMuted()); }}
+              title={soundMuted ? 'Unmute sounds' : 'Mute sounds'}
+              className="text-xs sm:text-sm px-1.5 sm:px-2 py-1 rounded-lg border transition-all bg-gray-800 border-gray-600 hover:bg-gray-700 text-gray-300">
+              {soundMuted ? '🔇' : '🔊'}
             </button>
             <button onClick={() => setShowRules(true)}
               className="text-xs sm:text-sm text-blue-300 hover:text-blue-200 underline">Rules</button>
