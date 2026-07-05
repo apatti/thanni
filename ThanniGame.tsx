@@ -305,7 +305,7 @@ function RulesModal({ onClose }: { onClose: () => void }): ReactNode {
 // Rendered when a Thanni or Hath Band (solo) round ends. The human face and
 // AI face express opposite emotions depending on whether the user's team made
 // or missed the bid. The "Next Hand" button triggers the regular post-round flow.
-function SoloBidResultModal({ bidName, outcome, tricksTaken, totalTricks, winPoints, failPenalty, onNext, isMatchOver }: {
+function SoloBidResultModal({ bidName, outcome, tricksTaken, totalTricks, winPoints, failPenalty, onNext, onShowTricks, isMatchOver }: {
   bidName: 'Thanni' | 'Hath Band';
   outcome: 'WON' | 'LOST';
   tricksTaken: number;
@@ -313,6 +313,7 @@ function SoloBidResultModal({ bidName, outcome, tricksTaken, totalTricks, winPoi
   winPoints: number;
   failPenalty: number;
   onNext: () => void;
+  onShowTricks: () => void;
   isMatchOver: boolean;
 }): ReactNode {
   const won = outcome === 'WON';
@@ -352,10 +353,16 @@ function SoloBidResultModal({ bidName, outcome, tricksTaken, totalTricks, winPoi
           {title}
         </h2>
         <p className="text-sm text-gray-300 mb-5 leading-relaxed">{subtitle}</p>
-        <button onClick={onNext}
-          className={`px-6 py-2 ${won ? 'bg-emerald-600 hover:bg-emerald-500' : 'bg-red-600 hover:bg-red-500'} text-white text-sm font-bold rounded-lg shadow transition-all active:scale-95`}>
-          {isMatchOver ? 'See Match Result' : 'Next Hand'}
-        </button>
+        <div className="flex justify-center gap-3">
+          <button onClick={onShowTricks}
+            className="px-5 py-2 bg-yellow-600 hover:bg-yellow-500 text-white text-sm font-bold rounded-lg shadow transition-all active:scale-95">
+            📋 Review Tricks
+          </button>
+          <button onClick={onNext}
+            className={`px-5 py-2 ${won ? 'bg-emerald-600 hover:bg-emerald-500' : 'bg-red-600 hover:bg-red-500'} text-white text-sm font-bold rounded-lg shadow transition-all active:scale-95`}>
+            {isMatchOver ? 'See Match Result' : 'Next Hand'}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -1903,6 +1910,7 @@ const blackPts = Math.max(0, -balance);
             winPoints={isThanni ? THANNI_WIN_POINTS : HATH_BAND_WIN_POINTS}
             failPenalty={isThanni ? THANNI_FAIL_PENALTY : HATH_BAND_FAIL_PENALTY}
             onNext={() => deal()}
+            onShowTricks={() => setShowTricksModal(true)}
             isMatchOver={false}
           />
         );
