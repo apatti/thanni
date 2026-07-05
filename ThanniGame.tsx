@@ -1265,6 +1265,7 @@ const blackPts = Math.max(0, -balance);
         if (callerLostTrick) dbg(`SOLO-END ${pName(soloCallerId!)} lost trick ${trickNum} — round ends early (caller took ${nr.filter(r => r.winnerPlayerId === soloCallerId).length} tricks)`);
         setTimeout(() => {
           setPile([]);
+          setTrumpRevealedBy(null);
           if (!callerLostTrick && trickNum < totalTricks) {
             setTrickNum(n => n + 1);
             setTurnPlayer(res.winnerPlayerId);
