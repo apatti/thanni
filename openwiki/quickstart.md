@@ -24,7 +24,9 @@ Start here if you are new to the repo. This page links to the key docs a future 
 - [Game rules](gameplay/rules.md)
 - [Special mechanics](gameplay/special-mechanics.md)
 - [AI strategy](technical/ai.md)
+- [Source map](source-map.md)
 - [Operations and verification](operations.md)
+- [Testing and coverage](testing.md)
 
 ## Best starting files in source
 - `/README.md` — user-facing summary and project structure.
@@ -41,14 +43,14 @@ Start here if you are new to the repo. This page links to the key docs a future 
 | Area | Key files | Why it matters |
 |---|---|---|
 | Game UI | `/ThanniGame.tsx`, `/src/Markdown.tsx`, `/src/sounds.ts` | Owns the visible game flow, rules modal, audio cues, and responsive card layout. |
-| Game engine | `/thanniEngine.ts` | Owns deck construction, legal moves, bidding, trump logic, trick resolution, and scoring. |
+| Game engine | `/thanniEngine.ts` | Owns deck construction, legal moves, bidding, trump logic, trick resolution, solo-call validation, scoring, and match end conditions. |
 | AI | `/thanniAI.ts`, `/src/ai/` | Owns heuristic play, per-seat strategy selection, and GA scaffolding. |
 | Documentation | `/README.md`, `/RULES.md`, `/PRD-Indian-24Card-Bidding-Game.md` | Describes the product intent and rules; useful for cross-checking behavior. |
-| Verification | `/scripts/thanni-smoke.ts` | Exercises key rule paths and strategy helpers. |
+| Verification | `/scripts/thanni-smoke.ts`, `/openwiki/testing.md` | Exercises key rule paths, strategy helpers, and current coverage gaps. |
 | Build/deploy | `/package.json`, `/.github/workflows/deploy.yml` | Defines local scripts and GitHub Pages publishing. |
 
 ## Change guidance
 - If you change gameplay, start in `/thanniEngine.ts`, then update `/RULES.md` and the relevant UI copy in `/ThanniGame.tsx`.
 - If you change AI behavior, inspect both `/thanniAI.ts` and `/src/ai/`; the codebase now has a legacy heuristic path and a pluggable strategy path.
 - If you change mobile layout or visual feedback, `/ThanniGame.tsx` and `/src/sounds.ts` are the main touchpoints.
-- Before shipping changes, run the build and the smoke script described in [Operations](operations.md).
+- Before shipping changes, run the build and the smoke script described in [Operations](operations.md), then check [Testing and coverage](testing.md) for gaps to fill.

@@ -313,7 +313,7 @@ export function computeNextDealer<T extends AIPlayer>(
   blackPts: number,
   players: T[],
 ): string {
-  if (redPts === blackPts) return getNextPlayerClockwise(prevDealerId);
+  if (redPts === blackPts) return prevDealerId;
   const trailingTeam: Team = redPts < blackPts ? 'RED' : 'BLACK';
   const dealerPlayer = players.find(p => p.id === prevDealerId);
   if (dealerPlayer && dealerPlayer.team === trailingTeam) return prevDealerId; // keep same player
