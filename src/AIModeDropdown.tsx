@@ -48,31 +48,36 @@ export function AIModeDropdown({ onChange }: { onChange?: () => void }): ReactNo
         AI Mode
       </button>
       {open && (
-        <div className="absolute right-0 mt-2 w-64 bg-gray-900 border border-purple-500/40 rounded-lg p-3 shadow-2xl z-50">
-          <div className="text-xs text-gray-300 mb-2 font-bold">Per-seat AI strategy</div>
-          {seatIds.map(seat => (
-            <div key={seat} className="flex items-center justify-between mb-1">
-              <span className="text-xs text-gray-300">{seat} ({BOT_NAMES[seat] ?? seat})</span>
-              <select
-                value={mode[seat]}
-                onChange={e => handleSeatChange(seat, e.target.value as AIStrategyName)}
-                className="bg-gray-800 text-xs text-white rounded px-1 py-0.5 border border-gray-700">
-                <option value="legacy">legacy</option>
-                <option value="heuristic">heuristic</option>
-                <option value="mcts">mcts (placeholder)</option>
-                <option value="ga">ga (placeholder)</option>
-              </select>
+        <>
+          {/* Backdrop — closes dropdown on tap outside */}
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          {/* Panel: centered overlay on mobile, absolute dropdown on sm+ */}
+          <div className="fixed inset-x-3 top-16 z-50 sm:absolute sm:inset-auto sm:right-0 sm:top-full sm:mt-2 w-auto sm:w-72 bg-gray-900 border border-purple-500/40 rounded-lg p-4 sm:p-3 shadow-2xl">
+            <div className="text-sm sm:text-xs text-gray-300 mb-3 sm:mb-2 font-bold">Per-seat AI strategy</div>
+            {seatIds.map(seat => (
+              <div key={seat} className="flex items-center justify-between mb-2 sm:mb-1 gap-2">
+                <span className="text-sm sm:text-xs text-gray-300 whitespace-nowrap">{seat} ({BOT_NAMES[seat] ?? seat})</span>
+                <select
+                  value={mode[seat]}
+                  onChange={e => handleSeatChange(seat, e.target.value as AIStrategyName)}
+                  className="bg-gray-800 text-sm sm:text-xs text-white rounded px-2 sm:px-1 py-1 sm:py-0.5 border border-gray-700 min-w-0">
+                  <option value="legacy">legacy</option>
+                  <option value="heuristic">heuristic</option>
+                  <option value="mcts">mcts (placeholder)</option>
+                  <option value="ga">ga (placeholder)</option>
+                </select>
+              </div>
+            ))}
+            <button
+              onClick={handleReset}
+              className="mt-2 w-full text-sm sm:text-xs bg-gray-700 hover:bg-gray-600 text-gray-200 rounded py-1.5 sm:py-1">
+              Reset to default
+            </button>
+            <div className="text-xs sm:text-[10px] text-gray-500 mt-2 italic leading-relaxed">
+              'legacy' bypasses the strategy registry (current behavior). 'heuristic'/'mcts'/'ga' route through getAIStrategy().chooseCard/chooseBid. Thanni & Hath Band decisions always use the heuristic.
             </div>
-          ))}
-          <button
-            onClick={handleReset}
-            className="mt-2 w-full text-xs bg-gray-700 hover:bg-gray-600 text-gray-200 rounded py-1">
-            Reset to default
-          </button>
-          <div className="text-[10px] text-gray-500 mt-2 italic leading-relaxed">
-            'legacy' bypasses the strategy registry (current behavior). 'heuristic'/'mcts'/'ga' route through getAIStrategy().chooseCard/chooseBid. Thanni & Hath Band decisions always use the heuristic.
           </div>
-        </div>
+        </>
       )}
     </div>
   );
