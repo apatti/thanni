@@ -26,6 +26,7 @@ import {
 } from './src/ai';
 import { AIModeDropdown } from './src/AIModeDropdown';
 import { initAudio, playSound, isMuted, toggleMute } from './src/sounds';
+import { QuickStartGuide } from './src/QuickStartGuide';
 
 // ─── Types ────────────────────────────────────────────────────────────
 type GameStatus =
@@ -399,8 +400,8 @@ function MatchOverModal({ winner, redPoints, blackPoints, pName, onNewMatch }: {
 }
 
 // ─── Lobby Screen ─────────────────────────────────────────────────────
-function LobbyScreen({ onStart, onShowRules, playerName, setPlayerName }: {
-  onStart: () => void; onShowRules: () => void;
+function LobbyScreen({ onStart, onShowRules, onShowQuickStart, playerName, setPlayerName }: {
+  onStart: () => void; onShowRules: () => void; onShowQuickStart: () => void;
   playerName: string; setPlayerName: (n: string) => void;
 }): ReactNode {
   const teamColors: Record<Team, string> = { RED: 'from-red-500 to-red-700', BLACK: 'from-gray-600 to-gray-900' };
@@ -427,14 +428,19 @@ function LobbyScreen({ onStart, onShowRules, playerName, setPlayerName }: {
           className="w-full bg-gray-900 text-white px-4 py-3 rounded-lg border border-gray-600 focus:border-yellow-400 focus:ring-2 focus:ring-yellow-400/30 outline-none text-sm sm:text-base mb-4 transition"
         />
 
-        <div className="grid grid-cols-2 gap-3 mb-5">
+        <div className="grid grid-cols-2 gap-3 mb-3">
           <button onClick={onStart} disabled={!playerName.trim()}
             className={`px-4 py-3 font-bold rounded-lg shadow transition-all active:scale-95 ${playerName.trim() ? 'bg-emerald-600 hover:bg-emerald-500 text-white' : 'bg-gray-700 text-gray-500 cursor-not-allowed'}`}>
             New Game
           </button>
-          <button onClick={onShowRules}
+          <button onClick={onShowQuickStart}
             className="px-4 py-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-lg shadow transition-all active:scale-95">
             How to Play
+          </button>
+        </div>
+        <div className="text-center mb-5">
+          <button onClick={onShowRules} className="text-xs text-gray-400 hover:text-blue-300 underline transition">
+            Full Rules
           </button>
         </div>
 
@@ -535,6 +541,7 @@ export default function ThanniGame(): ReactNode {
   const [playerName, setPlayerNameState] = useState('');
   const playerNameRef = useRef('');
   const [showRules, setShowRules] = useState(false);
+  const [showQuickStart, setShowQuickStart] = useState(false);
   const [soundMuted, setSoundMuted] = useState(isMuted());
   const [cardPickPhase, setCardPickPhase] = useState<'IDLE' | 'PICKING' | 'REVEAL'>('IDLE');
   const [pickCards, setPickCards] = useState<Card[]>([]);
@@ -1366,6 +1373,7 @@ const blackPts = Math.max(0, -balance);
     return (
       <>
         {showRules && <RulesModal onClose={() => setShowRules(false)} />}
+        {showQuickStart && <QuickStartGuide onClose={() => setShowQuickStart(false)} />}
         {cardPickPhase === 'PICKING' || cardPickPhase === 'REVEAL' ? (
           <CardPickScreen
             cards={pickCards}
@@ -1377,6 +1385,7 @@ const blackPts = Math.max(0, -balance);
           <LobbyScreen
             onStart={handleStartGame}
             onShowRules={() => setShowRules(true)}
+            onShowQuickStart={() => setShowQuickStart(true)}
             playerName={playerName}
             setPlayerName={setPlayerName}
           />
