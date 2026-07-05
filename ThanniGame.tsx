@@ -528,8 +528,8 @@ function CardPickScreen({ cards, revealedCard, onPick, playerName }: {
 export default function ThanniGame(): ReactNode {
   // ── Lobby / pre-game state
   const [gameStarted, setGameStarted] = useState(false);
-  const [playerName, setPlayerNameState] = useState('You');
-  const playerNameRef = useRef('You');
+  const [playerName, setPlayerNameState] = useState('');
+  const playerNameRef = useRef('');
   const [showRules, setShowRules] = useState(false);
   const [cardPickPhase, setCardPickPhase] = useState<'IDLE' | 'PICKING' | 'REVEAL'>('IDLE');
   const [pickCards, setPickCards] = useState<Card[]>([]);
@@ -635,14 +635,13 @@ const blackPts = Math.max(0, -balance);
 
   // ── Player name setter (synchronously updates ref + state)
   const setPlayerName = useCallback((name: string) => {
-    const v = name || 'You';
-    setPlayerNameState(v);
-    playerNameRef.current = v;
+    setPlayerNameState(name);
+    playerNameRef.current = name;
   }, []);
 
   // ── pName helper — uses ref so callbacks don't need to depend on player name
   const pName = useCallback((pid: string): string => {
-    if (pid === PID) return playerNameRef.current;
+    if (pid === PID) return playerNameRef.current.trim() || 'You';
     return BOT_NAMES[pid] ?? pid;
   }, []);
 
@@ -650,7 +649,7 @@ const blackPts = Math.max(0, -balance);
   const getInitPlayers = useCallback((): PlayerState[] => [
     mkPlayer('p0', 'Arjun', 'RED', 'p2'),
     mkPlayer('p1', 'Vikram', 'BLACK', 'p3'),
-    mkPlayer('p2', playerNameRef.current, 'RED', 'p0', true),
+    mkPlayer('p2', playerNameRef.current.trim() || 'You', 'RED', 'p0', true),
     mkPlayer('p3', 'Priya', 'BLACK', 'p1'),
   ], []);
 
